@@ -17,7 +17,8 @@ class EdgarClient:
     def __init__(self, user_agent: str, *, transport: httpx.BaseTransport | None = None):
         self._http = httpx.Client(
             headers={"User-Agent": user_agent, "Accept-Encoding": "gzip, deflate"},
-            timeout=30.0,
+            # The getcurrent feed can take a minute to answer; bulk ZIPs are large.
+            timeout=httpx.Timeout(30.0, read=120.0),
             follow_redirects=True,
             transport=transport,
         )
@@ -36,7 +37,14 @@ class EdgarClient:
         delay = 2.0
         for attempt in range(retries + 1):
             self._throttle()
-            resp = self._http.get(url)
+            try:
+                resp = self._http.get(url)
+            except httpx.TimeoutException:
+                if attempt == retries:
+                    raise
+                time.sleep(delay)
+                delay *= 2
+                continue
             if resp.status_code not in RETRY_STATUS or attempt == retries:
                 resp.raise_for_status()
                 return resp
