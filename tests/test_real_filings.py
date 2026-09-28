@@ -74,3 +74,8 @@ def test_ceo_amendment_with_open_market_buys():
     assert f.document_type == "4/A" and f.role == "CEO" and f.issuer_ticker == "NBBK"
     assert [t.side for t in f.trades] == ["buy"] * 4
     assert f.filed_at.date() == date(2024, 3, 11)
+
+
+def test_both_parsers_read_the_original_filing_date_of_an_amendment():
+    assert BULK["0001493152-24-004448"].original_filed_on == date(2024, 1, 25)
+    assert _xml("0001493152-24-004448").original_filed_on == date(2024, 1, 25)

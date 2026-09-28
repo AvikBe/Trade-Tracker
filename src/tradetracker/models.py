@@ -36,5 +36,6 @@ class ParsedFiling:
     filed_at: datetime
     accepted_at: datetime | None = None
     source_url: str | None = None
+    original_filed_on: date | None = None  # amendments: when the original was filed
     trades: list[ParsedTrade] = field(default_factory=list)
     raw: dict | None = None

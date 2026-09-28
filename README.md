@@ -71,8 +71,11 @@ cross-checking 260 filings against their XML:
 - The data sets round shares and prices to two decimals (half up). The XML keeps
   full precision, so live-feed rows are more exact than bulk rows.
 - Within a data set, an amendment can be listed before its original. `load-bulk` and
-  `poll-edgar` finish with a relink pass; amendments of filings older than the
-  loaded history stay unlinked, and `tt report` shows how many.
+  `poll-edgar` finish with a relink pass that matches on owner, issuer and period,
+  or on the original's filing date that each 4/A states. With 2023q4 and 2024q1
+  loaded, 1,109 of 1,122 2024q1 amendments are linked or amend a pre-October 2023
+  filing. Amendments of filings older than the loaded history stay unlinked, and
+  `tt report` shows how many.
 - Joint filings list their owners in a different order in the two sources, so both
   parsers pick the most senior owner, then the lowest CIK.
 - Row order in the data sets is not document order, and the ownership nature

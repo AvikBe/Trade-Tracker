@@ -179,3 +179,14 @@ def test_price_loader_never_exceeds_the_limit(conn, tmp_path):
     loader.run(conn, fake, limit=3)
     assert len(fake.calls) == 3
     assert conn.execute("SELECT count(*) FROM api_calls").fetchone()[0] == 3
+
+
+def test_amendment_that_corrects_the_period_links_by_original_filing_date(conn):
+    filings = {f.source_filing_id: f for f in parse_quarter(REAL_ZIP)}
+    original = filings["0001493152-24-003754"]
+    amendment = filings["0001493152-24-004448"]
+    assert amendment.original_filed_on == original.filed_at.date()
+    amendment.period_of_report = date(2024, 1, 19)  # as if the 4/A fixed the date
+    store.save_filing(conn, original)
+    store.save_filing(conn, amendment)
+    assert store.link_amendments(conn) == 1

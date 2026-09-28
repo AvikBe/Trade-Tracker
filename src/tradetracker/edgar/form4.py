@@ -137,6 +137,7 @@ def parse_form4(
         issuer_name=_text(root, "issuer/issuerName"),
         issuer_ticker=clean_ticker(_text(root, "issuer/issuerTradingSymbol")),
         period_of_report=period,
+        original_filed_on=_date(_text(root, "dateOfOriginalSubmission")),
         filed_at=filed_at,
         accepted_at=accepted_at,
         source_url=source_url,
