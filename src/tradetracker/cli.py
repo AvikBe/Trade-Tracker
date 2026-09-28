@@ -41,11 +41,15 @@ def cmd_load_bulk(args, settings):
     if args.quarters:
         client = EdgarClient(settings.require_edgar())
         DATA_DIR.mkdir(exist_ok=True)
+        links: dict[tuple[int, int], str] | None = None
         for y, q in _quarters(args.quarters):
             dest = DATA_DIR / f"{y}q{q}_form345.zip"
             if not dest.exists():
-                log.info("downloading %s", dest.name)
-                dest.write_bytes(client.get(bulk.quarter_url(y, q)).content)
+                if links is None:
+                    links = bulk.index_links(client.get(bulk.INDEX_URL).text)
+                url = links.get((y, q)) or bulk.quarter_url(y, q)
+                log.info("downloading %s", url)
+                dest.write_bytes(client.get(url).content)
             paths.append(dest)
         client.close()
 

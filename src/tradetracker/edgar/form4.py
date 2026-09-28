@@ -9,6 +9,7 @@ from ..models import ParsedFiling, ParsedTrade
 from .common import (
     KEPT_CODES,
     classify_role,
+    clean_ticker,
     eastern_midnight,
     mentions_10b5_1,
     owner_from_nature,
@@ -123,7 +124,7 @@ def parse_form4(
         role=role,
         issuer_cik=(_text(root, "issuer/issuerCik") or "").lstrip("0") or None,
         issuer_name=_text(root, "issuer/issuerName"),
-        issuer_ticker=(_text(root, "issuer/issuerTradingSymbol") or "").upper() or None,
+        issuer_ticker=clean_ticker(_text(root, "issuer/issuerTradingSymbol")),
         period_of_report=period,
         filed_at=filed_at,
         accepted_at=accepted_at,

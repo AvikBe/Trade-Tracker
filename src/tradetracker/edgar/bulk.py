@@ -1,18 +1,19 @@
 """Load the SEC's quarterly Insider Transactions Data Sets (flattened Forms 3/4/5).
 
-Each quarter is a ZIP at
-https://www.sec.gov/files/structureddata/data/form-345-data-sets/{YYYY}q{N}_form345.zip
-holding tab-separated tables keyed by ACCESSION_NUMBER. We read SUBMISSION,
+Each quarter is a ZIP, usually at
+https://www.sec.gov/files/structureddata/data/insider-transactions-data-sets/{YYYY}q{N}_form345.zip
+but the newest quarter sometimes sits under a different folder, so we read the links
+off the SEC's data set index page and only fall back to that pattern. Each ZIP holds tab-separated tables keyed by ACCESSION_NUMBER. We read SUBMISSION,
 REPORTINGOWNER, NONDERIV_TRANS and FOOTNOTES, and emit one ParsedFiling per Form 4.
 
 The data sets carry a filing date but no acceptance time, so accepted_at stays NULL
 and the backtest enters on the second trading day after filing (see plans doc).
-Column names follow the SEC's readme for the data sets; unverified against a live
-file until sec.gov is reachable from the build environment.
+Column names checked against the live 2024q1 file.
 """
 
 import csv
 import io
+import re
 import zipfile
 from collections import defaultdict
 from collections.abc import Iterator
@@ -24,18 +25,32 @@ from ..models import ParsedFiling, ParsedTrade
 from .common import (
     KEPT_CODES,
     classify_role,
+    clean_ticker,
     eastern_midnight,
     mentions_10b5_1,
     owner_from_nature,
     truthy,
 )
 
-BASE_URL = "https://www.sec.gov/files/structureddata/data/form-345-data-sets"
+BASE_URL = "https://www.sec.gov/files/structureddata/data/insider-transactions-data-sets"
+INDEX_URL = (
+    "https://www.sec.gov/data-research/sec-markets-data/insider-transactions-data-sets"
+)
 FORM4_TYPES = {"4", "4/A"}
+_ZIP_LINK = re.compile(r'href="([^"]*?(\d{4})q([1-4])_form345\.zip)"', re.IGNORECASE)
 
 
 def quarter_url(year: int, quarter: int) -> str:
     return f"{BASE_URL}/{year}q{quarter}_form345.zip"
+
+
+def index_links(html: str) -> dict[tuple[int, int], str]:
+    """Map (year, quarter) to the ZIP URL linked from the data set index page."""
+    out = {}
+    for href, y, q in _ZIP_LINK.findall(html):
+        url = href if href.startswith("http") else "https://www.sec.gov" + href
+        out.setdefault((int(y), int(q)), url)
+    return out
 
 
 def _rows(zf: zipfile.ZipFile, name: str) -> Iterator[dict[str, str]]:
@@ -146,7 +161,7 @@ def parse_quarter(path: Path | str) -> Iterator[ParsedFiling]:
             role=role,
             issuer_cik=cik,
             issuer_name=sub.get("ISSUERNAME"),
-            issuer_ticker=(sub.get("ISSUERTRADINGSYMBOL") or "").strip().upper() or None,
+            issuer_ticker=clean_ticker(sub.get("ISSUERTRADINGSYMBOL")),
             period_of_report=_sec_date(sub.get("PERIOD_OF_REPORT")),
             filed_at=eastern_midnight(filed),
             source_url=_filing_url(cik, acc),

@@ -1,11 +1,26 @@
 from datetime import date
 
 from bulkfixture import write
-from tradetracker.edgar.bulk import parse_quarter, quarter_url
+from tradetracker.edgar.bulk import index_links, parse_quarter, quarter_url
 
 
 def test_quarter_url():
-    assert quarter_url(2015, 1).endswith("/2015q1_form345.zip")
+    assert quarter_url(2015, 1).endswith("/insider-transactions-data-sets/2015q1_form345.zip")
+
+
+def test_index_links_prefers_page_links():
+    html = (
+        '<a href="/files/datastandardsinnovation/data/insider-transactions-data-sets/'
+        '2026q2_form345.zip">2026 Q2</a>'
+        '<a href="/files/structureddata/data/insider-transactions-data-sets/'
+        '2026q1_form345.zip">2026 Q1</a>'
+    )
+    links = index_links(html)
+    assert links[(2026, 2)] == (
+        "https://www.sec.gov/files/datastandardsinnovation/data/"
+        "insider-transactions-data-sets/2026q2_form345.zip"
+    )
+    assert (2026, 1) in links
 
 
 def test_parse_quarter(tmp_path):
@@ -26,3 +41,27 @@ def test_parse_quarter(tmp_path):
     assert other.role == "10% owner"
     assert other.trades[0].owner == "trust"
     assert other.trades[0].is_10b5_1  # from remarks
+
+
+def test_clean_ticker_handles_real_filer_input():
+    from tradetracker.edgar.common import clean_ticker
+
+    cases = {
+        "aapl": "AAPL",
+        "NONE": None,
+        "[ NONE ]": None,
+        "N/A": None,
+        "-": None,
+        "(SIRI)": "SIRI",
+        "NYSE: SCS": "SCS",
+        "NYSE/TRN": "TRN",
+        "Z AND ZG": "Z",
+        "GEF,GEF.B": "GEF",
+        "HEI, HEI.A": "HEI",
+        "GTII/GTBIF": "GTII",
+        "N O G": "NOG",
+        "BRK.B": "BRK.B",
+        None: None,
+    }
+    for raw, want in cases.items():
+        assert clean_ticker(raw) == want, raw
