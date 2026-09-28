@@ -1,0 +1,165 @@
+"""Command line entry point: `tt <command>`."""
+
+import argparse
+import logging
+import sys
+from datetime import date
+from pathlib import Path
+
+from . import config, db, report, store, validate
+from .edgar import bulk, feed, tickers
+from .edgar.client import EdgarClient
+from .edgar.form4 import parse_form4
+from .prices import loader
+from .prices.tiingo import TiingoClient
+
+log = logging.getLogger("tt")
+DATA_DIR = Path("data")
+
+
+def cmd_migrate(args, settings):
+    with db.connect(settings.database_url) as conn:
+        applied = db.migrate(conn)
+    print("applied: " + (", ".join(applied) or "nothing new"))
+
+
+def _quarters(spec: str) -> list[tuple[int, int]]:
+    """'2015q1:2016q4' or '2024q3' -> [(2015, 1), ...]."""
+    first, _, last = spec.lower().partition(":")
+    last = last or first
+    y, q = int(first[:4]), int(first[-1])
+    ly, lq = int(last[:4]), int(last[-1])
+    out = []
+    while (y, q) <= (ly, lq):
+        out.append((y, q))
+        y, q = (y + 1, 1) if q == 4 else (y, q + 1)
+    return out
+
+
+def cmd_load_bulk(args, settings):
+    paths: list[Path] = [Path(p) for p in args.file or []]
+    if args.quarters:
+        client = EdgarClient(settings.require_edgar())
+        DATA_DIR.mkdir(exist_ok=True)
+        for y, q in _quarters(args.quarters):
+            dest = DATA_DIR / f"{y}q{q}_form345.zip"
+            if not dest.exists():
+                log.info("downloading %s", dest.name)
+                dest.write_bytes(client.get(bulk.quarter_url(y, q)).content)
+            paths.append(dest)
+        client.close()
+
+    with db.connect(settings.database_url) as conn:
+        for path in paths:
+            created = seen = 0
+            for filing in bulk.parse_quarter(path):
+                seen += 1
+                _, new = store.save_filing(conn, filing)
+                created += new
+            conn.commit()
+            print(f"{path.name}: {seen} Form 4 filings, {created} new")
+
+
+def cmd_poll_edgar(args, settings):
+    client = EdgarClient(settings.require_edgar())
+    entries = feed.fetch_latest(client, pages=args.pages)
+    with db.connect(settings.database_url) as conn:
+        known = {
+            r[0]
+            for r in conn.execute(
+                "SELECT source_filing_id FROM filings WHERE source = 'edgar' "
+                "AND source_filing_id = ANY(%s)",
+                ([e.accession for e in entries],),
+            )
+        }
+        new = 0
+        for e in entries:
+            if e.accession in known:
+                continue
+            try:
+                url = feed.ownership_xml_url(client, e)
+                filing = parse_form4(
+                    client.get(url).content,
+                    accession=e.accession,
+                    accepted_at=e.accepted_at,
+                    filed_at=e.accepted_at,
+                    source_url=e.index_url,
+                )
+            except Exception:
+                log.exception("failed to ingest %s", e.accession)
+                continue
+            store.save_filing(conn, filing)
+            conn.commit()
+            new += 1
+    client.close()
+    print(f"feed: {len(entries)} Form 4 entries, {new} new")
+
+
+def cmd_map_tickers(args, settings):
+    client = EdgarClient(settings.require_edgar())
+    current = tickers.fetch_company_tickers(client)
+    client.close()
+    with db.connect(settings.database_url) as conn:
+        filled = store.fill_missing_tickers(conn, current)
+        for cik, ticker in current.items():
+            store.record_ticker(conn, cik, ticker, date.today(), "company_tickers")
+        conn.commit()
+    print(f"{len(current)} CIKs in SEC mapping; filled {filled} unmapped trades")
+
+
+def cmd_load_prices(args, settings):
+    client = TiingoClient(settings.require_tiingo())
+    with db.connect(settings.database_url) as conn:
+        stats = loader.run(conn, client, limit=args.limit)
+    client.close()
+    print(stats)
+
+
+def cmd_validate(args, settings):
+    with db.connect(settings.database_url) as conn:
+        print(validate.run(conn))
+
+
+def cmd_report(args, settings):
+    with db.connect(settings.database_url) as conn:
+        print(report.render(conn))
+
+
+def main(argv: list[str] | None = None) -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    p = argparse.ArgumentParser(prog="tt")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    sub.add_parser("migrate", help="apply SQL migrations").set_defaults(fn=cmd_migrate)
+
+    b = sub.add_parser("load-bulk", help="load SEC insider data sets")
+    b.add_argument("--quarters", help="e.g. 2015q1:2026q2")
+    b.add_argument("--file", action="append", help="a local *_form345.zip")
+    b.set_defaults(fn=cmd_load_bulk)
+
+    f = sub.add_parser("poll-edgar", help="ingest new Form 4s from the live feed")
+    f.add_argument("--pages", type=int, default=1, help="100 entries per page")
+    f.set_defaults(fn=cmd_poll_edgar)
+
+    sub.add_parser("map-tickers", help="fill tickers from SEC company_tickers.json").set_defaults(
+        fn=cmd_map_tickers
+    )
+
+    lp = sub.add_parser("load-prices", help="backfill/update prices within Tiingo quota")
+    lp.add_argument("--limit", type=int, help="max requests this run")
+    lp.set_defaults(fn=cmd_load_prices)
+
+    sub.add_parser("validate", help="apply validation rules").set_defaults(fn=cmd_validate)
+    sub.add_parser("report", help="milestone 1 coverage report").set_defaults(fn=cmd_report)
+
+    args = p.parse_args(argv)
+    try:
+        args.fn(args, config.load())
+    except config.ConfigError as e:
+        print(f"config error: {e}", file=sys.stderr)
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
