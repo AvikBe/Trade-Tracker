@@ -29,6 +29,7 @@ from .common import (
     eastern_midnight,
     mentions_10b5_1,
     owner_from_nature,
+    primary_owner,
     truthy,
 )
 
@@ -82,6 +83,16 @@ def _dec(s: str | None) -> Decimal | None:
         return None
 
 
+def _owner_role(owner: dict[str, str]) -> str | None:
+    rel = (owner.get("RPTOWNER_RELATIONSHIP") or "").lower()
+    return classify_role(
+        is_director="director" in rel,
+        is_officer="officer" in rel,
+        is_ten_pct="tenpercent" in rel.replace(" ", "").replace("%", "percent"),
+        officer_title=owner.get("RPTOWNER_TITLE"),
+    )
+
+
 def parse_quarter(path: Path | str) -> Iterator[ParsedFiling]:
     with zipfile.ZipFile(path) as zf:
         subs = {
@@ -90,11 +101,11 @@ def parse_quarter(path: Path | str) -> Iterator[ParsedFiling]:
             if r.get("DOCUMENT_TYPE") in FORM4_TYPES
         }
 
-        owners: dict[str, dict[str, str]] = {}
+        candidates: dict[str, list] = defaultdict(list)
         for r in _rows(zf, "REPORTINGOWNER.TSV"):
-            # Joint filings list several owners; keep the first, as the XML parser does.
             if r["ACCESSION_NUMBER"] in subs:
-                owners.setdefault(r["ACCESSION_NUMBER"], r)
+                candidates[r["ACCESSION_NUMBER"]].append((_owner_role(r), r["RPTOWNERCIK"], r))
+        owners = {acc: primary_owner(c) for acc, c in candidates.items()}
 
         footnotes: dict[tuple[str, str], str] = {}
         for r in _rows(zf, "FOOTNOTES.TSV"):
@@ -111,13 +122,7 @@ def parse_quarter(path: Path | str) -> Iterator[ParsedFiling]:
         owner = owners.get(acc)
         if filed is None or owner is None:
             continue
-        rel = (owner.get("RPTOWNER_RELATIONSHIP") or "").lower()
-        role = classify_role(
-            is_director="director" in rel,
-            is_officer="officer" in rel,
-            is_ten_pct="tenpercent" in rel.replace(" ", "").replace("%", "percent"),
-            officer_title=owner.get("RPTOWNER_TITLE"),
-        )
+        role = _owner_role(owner)
         doc_10b5_1 = truthy(sub.get("AFF10B5ONE")) or mentions_10b5_1(sub.get("REMARKS"))
 
         trades = []
@@ -163,6 +168,7 @@ def parse_quarter(path: Path | str) -> Iterator[ParsedFiling]:
             issuer_name=sub.get("ISSUERNAME"),
             issuer_ticker=clean_ticker(sub.get("ISSUERTRADINGSYMBOL")),
             period_of_report=_sec_date(sub.get("PERIOD_OF_REPORT")),
+            original_filed_on=_sec_date(sub.get("DATE_OF_ORIG_SUB")),
             filed_at=eastern_midnight(filed),
             source_url=_filing_url(cik, acc),
             trades=trades,

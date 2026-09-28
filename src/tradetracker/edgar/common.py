@@ -65,6 +65,23 @@ def classify_role(
     return None
 
 
+ROLE_ORDER = ["CEO", "CFO", "officer", "director", "10% owner", None]
+
+
+def primary_owner(owners: list[tuple[str | None, str, object]]) -> object | None:
+    """Pick one reporting owner of a joint filing: (role, cik, payload) -> payload.
+
+    The most senior role wins, then the lowest CIK. The bulk data sets and the XML
+    list joint owners in different orders, so "first listed" would make the same
+    filing's insider depend on which source loaded it.
+    """
+    if not owners:
+        return None
+    return min(
+        owners, key=lambda o: (ROLE_ORDER.index(o[0]), int(o[1] or 0) or float("inf"))
+    )[2]
+
+
 def owner_from_nature(direct_indirect: str | None, nature: str | None) -> str:
     if (direct_indirect or "D").upper().startswith("D"):
         return "self"

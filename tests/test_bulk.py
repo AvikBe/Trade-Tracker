@@ -65,3 +65,25 @@ def test_clean_ticker_handles_real_filer_input():
     }
     for raw, want in cases.items():
         assert clean_ticker(raw) == want, raw
+
+
+def test_primary_owner_prefers_seniority_then_lowest_cik():
+    from tradetracker.edgar.common import primary_owner
+
+    assert primary_owner([("10% owner", "0001385702", "fund"), ("director", "0001426157", "person")]) == "person"
+    assert primary_owner([(None, "1603544", "a"), (None, "1377832", "b"), (None, "1618205", "c")]) == "b"
+    assert primary_owner([("officer", "5", "o"), ("CEO", "9", "ceo")]) == "ceo"
+    assert primary_owner([(None, "", "blank"), (None, "7", "seven")]) == "seven"
+    assert primary_owner([]) is None
+
+
+def test_clean_ticker_more_real_values():
+    from tradetracker.edgar.common import clean_ticker
+
+    assert clean_ticker("BCDA;BCDAW") == "BCDA"
+    assert clean_ticker("BIO BIOB") == "BIO"
+    assert clean_ticker("BBXIA/B") == "BBXIA"
+    assert clean_ticker("NASDAQ:AAPL") == "AAPL"
+    assert clean_ticker("  msft  ") == "MSFT"
+    assert clean_ticker("[NONE") is None
+    assert clean_ticker("") is None

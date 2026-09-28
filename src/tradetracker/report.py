@@ -65,6 +65,14 @@ def render(conn: psycopg.Connection) -> str:
     lines = ["source  year  trades  mapped%  priced%  buys  10b5-1"]
     for src, year, n, mapped, priced, buys, plans in coverage(conn):
         lines.append(f"{src:<7} {year:<5} {n:>6}  {mapped:>7}  {priced:>7}  {buys:>4}  {plans:>6}")
+    total_am, linked = conn.execute(
+        "SELECT count(*), count(amends_filing_id) FROM filings WHERE document_type LIKE '%/A'"
+    ).fetchone()
+    if total_am:
+        lines.append(
+            f"amendments: {total_am}, linked to their original: {linked} "
+            f"({100 * linked / total_am:.1f}%); the rest amend filings older than the data"
+        )
     lines.append("")
     lines.append("Form 4 lag (business days, trade to filing)")
     hist = lag_histogram(conn)

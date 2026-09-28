@@ -51,15 +51,15 @@ def save_filing(conn: psycopg.Connection, f: ParsedFiling) -> tuple[int, bool]:
         """
         INSERT INTO filings (filer_id, source, source_filing_id, source_url, document_type,
                              issuer_cik, issuer_name, issuer_ticker, period_of_report,
-                             filed_at, accepted_at, amends_filing_id, raw)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                             filed_at, accepted_at, amends_filing_id, original_filed_on, raw)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         ON CONFLICT (source, source_filing_id) DO NOTHING
         RETURNING filing_id
         """,
         (
             filer_id, f.source, f.source_filing_id, f.source_url, f.document_type,
             f.issuer_cik, f.issuer_name, f.issuer_ticker, f.period_of_report,
-            f.filed_at, f.accepted_at, _original_filing(conn, filer_id, f),
+            f.filed_at, f.accepted_at, _original_filing(conn, filer_id, f), f.original_filed_on,
             Jsonb(f.raw) if f.raw is not None else None,
         ),
     ).fetchone()
@@ -93,6 +93,44 @@ def save_filing(conn: psycopg.Connection, f: ParsedFiling) -> tuple[int, bool]:
     if f.issuer_cik and f.issuer_ticker:
         record_ticker(conn, f.issuer_cik, f.issuer_ticker, f.filed_at.date(), "filing")
     return filing_id, True
+
+
+def link_amendments(conn: psycopg.Connection) -> int:
+    """Link amendments whose original arrived after them. Returns how many were linked.
+
+    save_filing links at insert time, but within a quarter's data set an amendment
+    can come before its original, and quarters can be loaded in any order.
+    Amendments of filings older than the loaded history stay unlinked.
+    """
+    cur = conn.execute(
+        """
+        WITH originals AS (
+            SELECT a.filing_id, coalesce((
+                SELECT o.filing_id FROM filings o
+                WHERE o.filer_id = a.filer_id
+                  AND o.issuer_cik IS NOT DISTINCT FROM a.issuer_cik
+                  AND o.period_of_report IS NOT DISTINCT FROM a.period_of_report
+                  AND o.document_type NOT LIKE '%/A' AND o.filed_at <= a.filed_at
+                ORDER BY o.filed_at, o.filing_id LIMIT 1
+            ), (
+                -- The amendment corrected the period, so match on the original's
+                -- filing date, which the 4/A states.
+                SELECT o.filing_id FROM filings o
+                WHERE o.filer_id = a.filer_id
+                  AND o.issuer_cik IS NOT DISTINCT FROM a.issuer_cik
+                  AND (o.filed_at AT TIME ZONE 'America/New_York')::date = a.original_filed_on
+                  AND o.document_type NOT LIKE '%/A'
+                ORDER BY o.filing_id LIMIT 1
+            )) AS original_id
+            FROM filings a
+            WHERE a.document_type LIKE '%/A' AND a.amends_filing_id IS NULL
+        )
+        UPDATE filings a SET amends_filing_id = originals.original_id
+        FROM originals
+        WHERE a.filing_id = originals.filing_id AND originals.original_id IS NOT NULL
+        """
+    )
+    return cur.rowcount
 
 
 def record_ticker(conn: psycopg.Connection, cik: str, ticker: str, seen, source: str) -> None:
