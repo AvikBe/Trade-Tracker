@@ -95,6 +95,35 @@ def save_filing(conn: psycopg.Connection, f: ParsedFiling) -> tuple[int, bool]:
     return filing_id, True
 
 
+def link_amendments(conn: psycopg.Connection) -> int:
+    """Link amendments whose original arrived after them. Returns how many were linked.
+
+    save_filing links at insert time, but within a quarter's data set an amendment
+    can come before its original, and quarters can be loaded in any order.
+    Amendments of filings older than the loaded history stay unlinked.
+    """
+    cur = conn.execute(
+        """
+        WITH originals AS (
+            SELECT a.filing_id, (
+                SELECT o.filing_id FROM filings o
+                WHERE o.filer_id = a.filer_id
+                  AND o.issuer_cik IS NOT DISTINCT FROM a.issuer_cik
+                  AND o.period_of_report IS NOT DISTINCT FROM a.period_of_report
+                  AND o.document_type NOT LIKE '%/A' AND o.filed_at <= a.filed_at
+                ORDER BY o.filed_at, o.filing_id LIMIT 1
+            ) AS original_id
+            FROM filings a
+            WHERE a.document_type LIKE '%/A' AND a.amends_filing_id IS NULL
+        )
+        UPDATE filings a SET amends_filing_id = originals.original_id
+        FROM originals
+        WHERE a.filing_id = originals.filing_id AND originals.original_id IS NOT NULL
+        """
+    )
+    return cur.rowcount
+
+
 def record_ticker(conn: psycopg.Connection, cik: str, ticker: str, seen, source: str) -> None:
     conn.execute(
         """

@@ -24,3 +24,4 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["live: hits the real SEC and Tiingo APIs (TT_LIVE=1)"]

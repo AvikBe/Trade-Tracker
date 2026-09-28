@@ -62,6 +62,9 @@ def cmd_load_bulk(args, settings):
                 created += new
             conn.commit()
             print(f"{path.name}: {seen} Form 4 filings, {created} new")
+        linked = store.link_amendments(conn)
+        conn.commit()
+        print(f"linked {linked} amendments to their original filing")
 
 
 def cmd_poll_edgar(args, settings):
@@ -95,6 +98,8 @@ def cmd_poll_edgar(args, settings):
             store.save_filing(conn, filing)
             conn.commit()
             new += 1
+        store.link_amendments(conn)
+        conn.commit()
     client.close()
     print(f"feed: {len(entries)} Form 4 entries, {new} new")
 

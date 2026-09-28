@@ -13,6 +13,7 @@ from .common import (
     eastern_midnight,
     mentions_10b5_1,
     owner_from_nature,
+    primary_owner,
     truthy,
 )
 
@@ -46,6 +47,18 @@ def _date(s: str | None) -> date | None:
     return date.fromisoformat(s[:10]) if s else None
 
 
+def _owner_role(owner) -> str | None:
+    rel = owner.find("reportingOwnerRelationship")
+    if rel is None:
+        return None
+    return classify_role(
+        is_director=truthy(_text(rel, "isDirector")),
+        is_officer=truthy(_text(rel, "isOfficer")),
+        is_ten_pct=truthy(_text(rel, "isTenPercentOwner")),
+        officer_title=_text(rel, "officerTitle"),
+    )
+
+
 def parse_form4(
     xml: bytes,
     *,
@@ -68,16 +81,14 @@ def parse_form4(
     # aff10b5One is the checkbox added to Form 4 in April 2023.
     doc_10b5_1 = truthy(_text(root, "aff10b5One"))
 
-    owner = root.find("reportingOwner")
+    owners = [
+        (_owner_role(o), _text(o, "reportingOwnerId/rptOwnerCik"), o)
+        for o in root.findall("reportingOwner")
+    ]
+    owner = primary_owner(owners)
     if owner is None:
         raise ValueError(f"{accession}: no reportingOwner")
-    rel = owner.find("reportingOwnerRelationship")
-    role = classify_role(
-        is_director=truthy(_text(rel, "isDirector")) if rel is not None else False,
-        is_officer=truthy(_text(rel, "isOfficer")) if rel is not None else False,
-        is_ten_pct=truthy(_text(rel, "isTenPercentOwner")) if rel is not None else False,
-        officer_title=_text(rel, "officerTitle") if rel is not None else None,
-    )
+    role = _owner_role(owner)
 
     period = _date(_text(root, "periodOfReport"))
     if filed_at is None:

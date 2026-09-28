@@ -77,3 +77,105 @@ def test_price_queue_puts_backfills_first_and_respects_quota(conn, tmp_path):
     for _ in range(49):
         store.log_api_call(conn, "tiingo", "x")
     assert loader.remaining_quota(conn) == 1
+
+
+REAL_ZIP = Path(__file__).parent / "fixtures" / "real" / "2024q1_subset_form345.zip"
+
+
+def _counts(conn):
+    return conn.execute(
+        "SELECT (SELECT count(*) FROM filings), (SELECT count(*) FROM trades), "
+        "(SELECT count(*) FROM filers), (SELECT count(*) FROM ticker_history)"
+    ).fetchone()
+
+
+def test_real_quarter_reload_changes_nothing(conn):
+    for _ in range(2):
+        for f in parse_quarter(REAL_ZIP):
+            store.save_filing(conn, f)
+        conn.commit()
+        if _ == 0:
+            first = _counts(conn)
+    assert first == _counts(conn)
+    assert first[:2] == (8, 16)
+
+
+def test_amendment_listed_before_its_original_is_linked_after_load(conn):
+    # In the real 2024q1 data set, MINM's 4/A (filed Jan 31) sits on line 82 of
+    # SUBMISSION.tsv and its original 4 (filed Jan 25) on line 11,588.
+    filings = list(parse_quarter(REAL_ZIP))
+    amendment = next(f for f in filings if f.source_filing_id == "0001493152-24-004448")
+    original = next(f for f in filings if f.source_filing_id == "0001493152-24-003754")
+    store.save_filing(conn, amendment)
+    store.save_filing(conn, original)
+    assert conn.execute("SELECT count(amends_filing_id) FROM filings").fetchone()[0] == 0
+
+    assert store.link_amendments(conn) == 1
+    assert store.link_amendments(conn) == 0  # idempotent
+    linked_to = conn.execute(
+        "SELECT o.source_filing_id FROM filings a JOIN filings o ON o.filing_id = a.amends_filing_id "
+        "WHERE a.source_filing_id = '0001493152-24-004448'"
+    ).fetchone()[0]
+    assert linked_to == "0001493152-24-003754"
+
+
+def test_amendment_without_loaded_original_stays_unlinked_and_is_reported(conn):
+    for f in parse_quarter(REAL_ZIP):
+        store.save_filing(conn, f)
+    store.link_amendments(conn)
+    # NBBK's 4/A amends a filing that is not in the fixture.
+    assert conn.execute(
+        "SELECT amends_filing_id FROM filings WHERE source_filing_id = '0001437749-24-007342'"
+    ).fetchone()[0] is None
+    assert "amendments: 2, linked to their original: 1 (50.0%)" in report.render(conn)
+
+
+def test_trade_after_filing_is_rejected(conn, tmp_path):
+    _load(conn, tmp_path)
+    conn.execute("UPDATE trades SET trade_date = '2024-12-31' WHERE line_no = 0 AND filing_id = "
+                 "(SELECT filing_id FROM filings WHERE source_filing_id = '0000000001-24-000001')")
+    assert validate.run(conn)["trade_after_filing"] == 1
+    detail = conn.execute("SELECT detail FROM rejects WHERE rule = 'trade_after_filing'").fetchone()
+    assert detail[0] == "trade 2024-12-31 after filing 2024-03-06"
+
+
+class _FakeTiingo:
+    def __init__(self, missing=(), failing=()):
+        self.calls, self.missing, self.failing = [], set(missing), set(failing)
+
+    def daily(self, ticker, start):
+        import httpx
+
+        from tradetracker.prices.tiingo import TickerNotFound
+
+        self.calls.append((ticker, start))
+        if ticker in self.missing:
+            raise TickerNotFound(ticker)
+        if ticker in self.failing:
+            raise httpx.HTTPStatusError("429", request=httpx.Request("GET", "x"),
+                                        response=httpx.Response(429))
+        return [PriceBar(ticker, date(2024, 3, 4), 1, 1, 1, 1, 1, 1, 10)]
+
+
+def test_price_loader_records_not_found_errors_and_resumes(conn, tmp_path):
+    _load(conn, tmp_path)
+    fake = _FakeTiingo(missing={"OTHR"}, failing={"SPY"})
+    stats = loader.run(conn, fake, limit=100)
+    assert stats["not_found"] == 1 and stats["errors"] == 1
+    statuses = dict(conn.execute("SELECT ticker, status FROM price_status").fetchall())
+    assert statuses["OTHR"] == "not_found" and statuses["SPY"] == "error"
+    assert statuses["EXWD"] == "ok"
+
+    # Next run: the loaded ticker only updates from its last bar, and the missing one
+    # is not retried for 30 days. The errored one is retried.
+    todo = dict(loader.tickers_to_load(conn))
+    assert "OTHR" not in todo and "SPY" in todo
+    assert todo["EXWD"] == date(2024, 3, 5)
+
+
+def test_price_loader_never_exceeds_the_limit(conn, tmp_path):
+    _load(conn, tmp_path)
+    fake = _FakeTiingo()
+    loader.run(conn, fake, limit=3)
+    assert len(fake.calls) == 3
+    assert conn.execute("SELECT count(*) FROM api_calls").fetchone()[0] == 3
