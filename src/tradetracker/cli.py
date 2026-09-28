@@ -8,6 +8,8 @@ from pathlib import Path
 
 from . import config, db, report, store, validate
 from .edgar import bulk, feed, tickers
+from .features import job as features_job
+from .features import summary as features_summary
 from .edgar.client import EdgarClient
 from .edgar.form4 import parse_form4
 from .prices import loader
@@ -124,6 +126,17 @@ def cmd_validate(args, settings):
         print(validate.run(conn))
 
 
+def cmd_features(args, settings):
+    as_of = date.fromisoformat(args.as_of) if args.as_of else None
+    with db.connect(settings.database_url) as conn:
+        print(features_job.run(conn, recompute=args.all, as_of=as_of))
+
+
+def cmd_feature_report(args, settings):
+    with db.connect(settings.database_url) as conn:
+        print(features_summary.render(conn))
+
+
 def cmd_report(args, settings):
     with db.connect(settings.database_url) as conn:
         print(report.render(conn))
@@ -155,6 +168,15 @@ def main(argv: list[str] | None = None) -> int:
 
     sub.add_parser("validate", help="apply validation rules").set_defaults(fn=cmd_validate)
     sub.add_parser("report", help="milestone 1 coverage report").set_defaults(fn=cmd_report)
+
+    fe = sub.add_parser("features", help="compute trade_features for trades that lack them")
+    fe.add_argument("--all", action="store_true", help="recompute every trade")
+    fe.add_argument("--as-of", help="date for days_since_filing (default today, Eastern)")
+    fe.set_defaults(fn=cmd_features)
+
+    sub.add_parser("feature-report", help="feature distributions and coverage").set_defaults(
+        fn=cmd_feature_report
+    )
 
     args = p.parse_args(argv)
     try:

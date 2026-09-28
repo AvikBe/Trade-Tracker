@@ -4,24 +4,18 @@ Mapped share under ~95% for Form 4 means ticker mapping needs work before
 milestone 2 (features) starts.
 """
 
-from datetime import date, timedelta
+from datetime import date
 
 import psycopg
+
+from .features.calendar import SEC
 
 LAG_BUCKETS = [(0, 0), (1, 1), (2, 2), (3, 5), (6, 10), (11, 30), (31, 45), (46, 10_000)]
 
 
 def business_days(start: date, end: date) -> int:
-    """Weekdays from start (exclusive) to end (inclusive). Holidays ignored for now."""
-    if end <= start:
-        return 0
-    days = (end - start).days
-    weeks, rem = divmod(days, 7)
-    count = weeks * 5
-    for i in range(1, rem + 1):
-        if (start + timedelta(days=weeks * 7 + i)).weekday() < 5:
-            count += 1
-    return count
+    """SEC business days from start (exclusive) to end (inclusive), 0 if end <= start."""
+    return max(0, SEC.business_days_between(start, end))
 
 
 def coverage(conn: psycopg.Connection) -> list[tuple]:
