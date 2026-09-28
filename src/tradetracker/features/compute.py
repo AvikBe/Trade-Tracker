@@ -180,9 +180,10 @@ class _LogHistogram:
 def _duplicates(trades: list[TradeInput]) -> dict[int, tuple[TradeInput, bool]]:
     """Map amendment trades that restate a trade of the original filing to that trade.
 
-    An exact repeat (same side, date, shares and price) matches first; otherwise a line
-    with the same side and date is taken to correct it. Returns {trade_id: (original,
-    exact)}; each original line is matched at most once.
+    An exact repeat (same side, date, shares and price) matches first. Otherwise a line
+    with the same side and date is taken to correct the size or price, and then a line
+    with the same side, shares and price to correct the date. Returns {trade_id:
+    (original, exact)}; each original line is matched at most once.
     """
     by_filing: dict[int, list[TradeInput]] = defaultdict(list)
     for t in trades:
@@ -195,18 +196,21 @@ def _duplicates(trades: list[TradeInput]) -> dict[int, tuple[TradeInput, bool]]:
     for lines in amendments.values():
         originals = by_filing.get(lines[0].amends_filing_id, [])
         used: set[int] = set()
-        for exact in (True, False):
+        rules = [
+            (True, lambda o, t: (o.side, o.trade_date, o.shares, o.price)
+             == (t.side, t.trade_date, t.shares, t.price)),
+            (False, lambda o, t: (o.side, o.trade_date) == (t.side, t.trade_date)),
+            (False, lambda o, t: (o.side, o.shares, o.price) == (t.side, t.shares, t.price)),
+        ]
+        for exact, same in rules:
             for t in lines:
                 if t.trade_id in out:
                     continue
                 for o in originals:
-                    if o.trade_id in used or (o.side, o.trade_date) != (t.side, t.trade_date):
-                        continue
-                    if exact and (o.shares, o.price) != (t.shares, t.price):
-                        continue
-                    out[t.trade_id] = (o, exact)
-                    used.add(o.trade_id)
-                    break
+                    if o.trade_id not in used and same(o, t):
+                        out[t.trade_id] = (o, exact)
+                        used.add(o.trade_id)
+                        break
     return out
 
 

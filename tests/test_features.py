@@ -382,6 +382,17 @@ def test_amendment_correcting_shares_or_price_is_linked_to_the_line_it_fixes():
     assert rows[sold.trade_id].filing_date == date(2024, 3, 25)
 
 
+def test_amendment_correcting_the_trade_date_is_linked_by_size_and_price():
+    orig = trade(date(2024, 3, 5), date(2024, 3, 7), filing=700, filer=12, shares=300)
+    fixed = trade(date(2024, 3, 4), date(2024, 4, 2), filing=701, filer=12, doc="4/A",
+                  amends=700, shares=300)
+    rows = run([orig, fixed])
+    r = rows[fixed.trade_id]
+    assert r.duplicate_of_trade_id == orig.trade_id and r.flags[0] == "amendment_correction"
+    # Public since the original filing; the lag uses the corrected trade date.
+    assert r.filing_date == date(2024, 3, 7) and r.lag_days == 3
+
+
 def test_unlinked_amendment_is_flagged_but_kept():
     t = trade(date(2024, 3, 4), date(2024, 3, 20), doc="4/A")
     r = run([t])[t.trade_id]
