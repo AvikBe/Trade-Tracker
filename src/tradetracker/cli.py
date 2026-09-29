@@ -142,6 +142,45 @@ def cmd_feature_report(args, settings):
         print(features_summary.render(conn))
 
 
+def _backtest_tickers(conn) -> list[str]:
+    from .backtest.yahoo import EXTRA_SYMBOLS
+
+    rows = conn.execute("SELECT DISTINCT ticker FROM trades WHERE ticker IS NOT NULL ORDER BY 1")
+    return loader.BENCHMARKS + EXTRA_SYMBOLS + [r[0] for r in rows]
+
+
+def cmd_fetch_yahoo(args, settings):
+    from .backtest import yahoo
+
+    with db.connect(settings.database_url) as conn:
+        tickers = _backtest_tickers(conn)
+    print(yahoo.fetch_all(tickers, Path(args.cache), workers=args.workers, refresh=args.refresh))
+
+
+def cmd_fetch_sic(args, settings):
+    from .backtest import sectors
+
+    with db.connect(settings.database_url) as conn:
+        ciks = [r[0] for r in conn.execute(
+            "SELECT DISTINCT issuer_cik FROM filings WHERE issuer_cik IS NOT NULL")]
+    print(sectors.fetch_sic(ciks, Path(args.out), settings.require_edgar()))
+
+
+def cmd_backtest(args, settings):
+    from .backtest import events, prices, sectors, study
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    with db.connect(settings.database_url) as conn:
+        source = prices.open_source(args.prices, conn)
+        evs, exclusions = events.load_events(conn)
+        results = study.run_study(evs, source, sectors.load_sic(Path(args.sic)) if args.sic else {})
+    study.write_events(results, out / "events.csv.gz")
+    (out / "report.md").write_text(study.render(results, exclusions, source.name))
+    ok = sum(r.ok for r in results)
+    print(f"{len(results)} events, {ok} with returns; wrote {out / 'report.md'}")
+
+
 def cmd_report(args, settings):
     with db.connect(settings.database_url) as conn:
         print(report.render(conn))
@@ -182,6 +221,23 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("feature-report", help="feature distributions and coverage").set_defaults(
         fn=cmd_feature_report
     )
+
+    fy = sub.add_parser("fetch-yahoo", help="research prices from Yahoo into a cache dir")
+    fy.add_argument("--cache", required=True, help="directory for bars/<T>.csv.gz")
+    fy.add_argument("--workers", type=int, default=4)
+    fy.add_argument("--refresh", action="store_true", help="refetch tickers already done")
+    fy.set_defaults(fn=cmd_fetch_yahoo)
+
+    fs = sub.add_parser("fetch-sic", help="issuer SIC codes from EDGAR, for sector benchmarks")
+    fs.add_argument("--out", required=True, help="CSV cache, appended to")
+    fs.set_defaults(fn=cmd_fetch_sic)
+
+    bt = sub.add_parser("backtest", help="phase 3 study: returns by lag and drift")
+    bt.add_argument("--prices", required=True,
+                    help="'db', 'db:<source>', or a cache directory (Tiingo layout)")
+    bt.add_argument("--sic", help="SIC CSV from fetch-sic (sector benchmarks)")
+    bt.add_argument("--out", required=True, help="directory for report.md and events.csv.gz")
+    bt.set_defaults(fn=cmd_backtest)
 
     args = p.parse_args(argv)
     try:
