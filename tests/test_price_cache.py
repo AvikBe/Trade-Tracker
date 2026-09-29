@@ -56,6 +56,11 @@ def universe(*rows):
     return [{"quarter": q, "ticker": t, "buys": b, "trades": n} for q, t, b, n in rows]
 
 
+@pytest.fixture(autouse=True)
+def no_real_sleep(monkeypatch):
+    monkeypatch.setattr(pc.time, "sleep", lambda sec: None)
+
+
 @pytest.fixture
 def cache(tmp_path):
     c = pc.PriceCache(tmp_path / "prices")
@@ -385,3 +390,28 @@ def test_build_universe_and_import(conn, tmp_path):
     assert (str(row[0]), str(row[1]), row[2]) == ("11.2", "11.1", 2000)
     st = dict(conn.execute("SELECT ticker, status FROM price_status").fetchall())
     assert st == {"EXWD": "ok", "GONE": "not_found", "BADX": "error"}
+
+
+def test_run_waits_briefly_for_the_previous_hour_to_age_out(cache):
+    done_benchmarks(cache)
+    for i in range(45):  # last run's burst, 59 minutes ago
+        cache.log_call(T0 - timedelta(minutes=59, seconds=30 - i // 2), f"P{i}", "ok")
+    clock = Clock()
+    slept = []
+
+    def sleep(sec):
+        slept.append(sec)
+        clock.t += timedelta(seconds=sec)
+
+    client = FakeClient()
+    s = pc.run(cache, client, ORDER, now=clock, sleep=sleep)
+    assert slept and 30 < slept[0] <= 90 and s["ok"] == 4
+
+
+def test_run_does_not_wait_long(cache):
+    done_benchmarks(cache)
+    for i in range(45):
+        cache.log_call(T0 - timedelta(minutes=30), f"P{i}", "ok")
+    slept = []
+    s = pc.run(cache, FakeClient(), ORDER, now=Clock(), sleep=slept.append)
+    assert slept == [] and s["requested"] == 0

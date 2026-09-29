@@ -25,6 +25,7 @@ import gzip
 import json
 import os
 import re
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
@@ -43,6 +44,9 @@ MONTHLY_SYMBOL_BUDGET = int(os.environ.get("TT_TIINGO_SYMBOLS", 480))
 MAX_ATTEMPTS = 3
 RETRY_AFTER = timedelta(hours=1)
 LOCK_STALE = timedelta(minutes=50)
+# An hourly schedule lands just inside the previous run's hour, so a run waits up to this
+# long for the previous burst of calls to leave the window rather than skipping an hour.
+MAX_WAIT = timedelta(minutes=5)
 COOLDOWN = {
     "hourly": timedelta(minutes=55),
     "daily": timedelta(hours=6),
@@ -260,7 +264,17 @@ def _bar_range(text: str) -> tuple[int, str | None, str | None]:
     return len(lines), lines[0].split(",", 1)[0], lines[-1].split(",", 1)[0]
 
 
-def run(cache: PriceCache, client, order: list[str], *, now=utcnow, limit: int | None = None) -> dict:
+def _wait_for_window(calls: list[Call], now: datetime) -> timedelta:
+    """How long until every call of the past hour has aged out, if that is soon."""
+    recent = [c.at for c in calls if c.at > now - timedelta(hours=1)]
+    if not recent:
+        return timedelta(0)
+    wait = max(recent) + timedelta(hours=1, seconds=5) - now
+    return wait if wait <= MAX_WAIT else timedelta(0)
+
+
+def run(cache: PriceCache, client, order: list[str], *, now=utcnow, limit: int | None = None,
+        sleep=None) -> dict:
     """Fetch as many queued tickers as the quotas allow. Safe to run any time."""
     cache.ensure()
     started = now()
@@ -279,6 +293,10 @@ def run(cache: PriceCache, client, order: list[str], *, now=utcnow, limit: int |
         return dict(stats)
     try:
         status = cache.status()
+        wait = _wait_for_window(cache.calls(), started)
+        if wait:
+            (sleep or time.sleep)(wait.total_seconds())
+            started = now()
         b = budget(cache.calls(), started)
         todo = queue(cache.universe(), status, order, started)
         for ticker in todo:
