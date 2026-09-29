@@ -179,13 +179,13 @@ def cross_table(results: list[Result], h: int, cutoffs: list[float]) -> str:
 
 def contrast(results: list[Result], h: int, cutoffs: list[float]) -> tuple:
     """(late minus prompt, Q5 minus Q1): each a (difference, Welch t, n_a, n_b)."""
-    prompt = [v for x in results if x.event.lag_days <= 2 and (v := x.r(h)) is not None]
-    late = [v for x in results if x.event.lag_days > 2 and (v := x.r(h)) is not None]
+    prompt = _values([x for x in results if x.event.lag_days <= 2], h)
+    late = _values([x for x in results if x.event.lag_days > 2], h)
     d = by_drift(results, cutoffs)
-    q1 = [v for x in d.get(0, []) if (v := x.r(h)) is not None]
-    q5 = [v for x in d.get(len(cutoffs), []) if (v := x.r(h)) is not None]
-    return ((*stats.diff_summary(late, prompt), len(late), len(prompt)),
-            (*stats.diff_summary(q5, q1), len(q5), len(q1)))
+    q1 = _values(d.get(0, []), h)
+    q5 = _values(d.get(len(cutoffs), []), h)
+    return ((*stats.diff_summary(late[0], prompt[0], late[1], prompt[1]), len(late[0]), len(prompt[0])),
+            (*stats.diff_summary(q5[0], q1[0], q5[1], q1[1]), len(q5[0]), len(q1[0])))
 
 
 # ---------------------------------------------------------------- walk-forward
@@ -416,7 +416,7 @@ def section_for(title: str, results: list[Result]) -> str:
                      pct(dl), num(tl), pct(dd), num(td)])
     parts.append(f"**By period, {PRIMARY_H} days (drift quintiles from the full sample)**\n")
     parts.append(table(["period", "n", "mean vs SPY", "t (clustered)", "hit rate",
-                        "late - prompt", "t", "drift Q5 - Q1", "t"], rows))
+                        "late - prompt", "t (clustered)", "drift Q5 - Q1", "t (clustered)"], rows))
     parts.append("")
     folds = walk_forward(results)
     parts.append(f"**Walk-forward, {PRIMARY_H} days** (train on all earlier years, purged; "

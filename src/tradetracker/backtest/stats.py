@@ -78,12 +78,29 @@ def winsor_cutoffs(values: list[float], lo: float = 0.01, hi: float = 0.99) -> t
     return v[int(lo * (len(v) - 1))], v[int(hi * (len(v) - 1))]
 
 
-def diff_summary(a: list[float], b: list[float]) -> tuple[float | None, float | None]:
-    """Mean of a minus mean of b, with a Welch t-stat."""
+def diff_summary(a: list[float], b: list[float], keys_a: list | None = None,
+                 keys_b: list | None = None) -> tuple[float | None, float | None]:
+    """Mean of a minus mean of b, with a t-stat.
+
+    With cluster keys the standard error is cluster-robust: both groups' deviations are
+    summed per cluster, so a month that lifts both groups doesn't count as evidence.
+    Without keys it is Welch's t.
+    """
     if len(a) < 2 or len(b) < 2:
         return None, None
     ma, mb = sum(a) / len(a), sum(b) / len(b)
-    se = math.sqrt(statistics.variance(a) / len(a) + statistics.variance(b) / len(b))
+    if keys_a is None or keys_b is None:
+        se = math.sqrt(statistics.variance(a) / len(a) + statistics.variance(b) / len(b))
+    else:
+        sums: dict = defaultdict(float)
+        for v, k in zip(a, keys_a):
+            sums[k] += (v - ma) / len(a)
+        for v, k in zip(b, keys_b):
+            sums[k] -= (v - mb) / len(b)
+        g = len(sums)
+        if g < 2:
+            return ma - mb, None
+        se = math.sqrt(sum(x * x for x in sums.values()) * g / (g - 1))
     return ma - mb, ((ma - mb) / se if se > 0 else None)
 
 

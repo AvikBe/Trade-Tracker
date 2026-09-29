@@ -450,3 +450,16 @@ def test_source_comparison_measures_agreement_and_survivorship():
     assert "100.0% within 0.5 pp" in text
     assert "| missing from yahoo | 50 |" in text
     assert "no_prices/ok 50" in text
+
+
+def test_clustered_difference_matches_hand_computation():
+    a, ka = [1.0, 3.0], ["m1", "m2"]
+    b, kb = [0.0, 0.0, 3.0], ["m1", "m1", "m2"]
+    d, t = stats.diff_summary(a, b, ka, kb)
+    assert d == pytest.approx(2.0 - 1.0)
+    # Per-cluster: m1 = (1-2)/2 - ((0-1)+(0-1))/3 = 1/6; m2 = (3-2)/2 - (3-1)/3 = -1/6.
+    se = math.sqrt(((1 / 6) ** 2 + (1 / 6) ** 2) * 2)
+    assert t == pytest.approx(1.0 / se)
+    # Welch without keys.
+    d2, t2 = stats.diff_summary(a, b)
+    assert d2 == d and t2 == pytest.approx(1.0 / math.sqrt(2 / 2 + 3 / 3))
