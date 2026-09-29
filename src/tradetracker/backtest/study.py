@@ -401,6 +401,23 @@ def section_for(title: str, results: list[Result]) -> str:
         hv = [v for x in results if (v := x.r(h)) is not None]
         parts.append(bucket_tables(results, h, cutoffs, stats.winsor_cutoffs(hv) if hv else None))
         parts.append("")
+    groups = [
+        ("role: CEO or CFO", lambda e: e.role in ("CEO", "CFO")),
+        ("role: other officer", lambda e: e.role == "officer"),
+        ("role: director", lambda e: e.role == "director"),
+        ("role: 10% owner", lambda e: e.role == "10% owner"),
+        ("role: none given", lambda e: e.role is None),
+        ("cluster: 1 insider", lambda e: e.cluster_count <= 1),
+        ("cluster: 2 insiders", lambda e: e.cluster_count == 2),
+        ("cluster: 3+ insiders", lambda e: e.cluster_count >= 3),
+    ]
+    hv = [v for x in results if (v := x.r(PRIMARY_H)) is not None]
+    w = stats.winsor_cutoffs(hv) if hv else None
+    parts.append(f"**By role and cluster, {PRIMARY_H} days** (context for scoring; cluster "
+                 "counts include 10b5-1 trades by other insiders)\n")
+    parts.append(table(SUMMARY_HEADERS, [summary_row(label, [x for x in results if f(x.event)],
+                                                     PRIMARY_H, w) for label, f in groups]))
+    parts.append("")
     parts.append(f"**Lag x drift, mean {PRIMARY_H}-day excess vs SPY (clustered t)**\n")
     parts.append(cross_table(results, PRIMARY_H, cutoffs))
     parts.append("")
