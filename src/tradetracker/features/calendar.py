@@ -64,6 +64,7 @@ FEDERAL_EXTRA = {
 
 # NYSE unscheduled full-day closures.
 NYSE_EXTRA = {
+    date(1994, 4, 27),   # President Nixon
     date(2001, 9, 11), date(2001, 9, 12), date(2001, 9, 13), date(2001, 9, 14),
     date(2004, 6, 11),   # President Reagan
     date(2007, 1, 2),    # President Ford
@@ -93,13 +94,14 @@ def federal_holidays(year: int) -> frozenset[date]:
     if date(year + 1, 1, 1).weekday() == 5:
         days.add(date(year, 12, 31))
     days |= {d for d in FEDERAL_EXTRA if d.year == year}
-    return frozenset(days)
+    # Each date belongs to its own year's set only: 1 Jan on a Saturday is observed on
+    # 31 Dec of the year before, and must not be counted again under the new year.
+    return frozenset(d for d in days if d.year == year)
 
 
 @lru_cache(maxsize=None)
 def nyse_holidays(year: int) -> frozenset[date]:
     days = {
-        _nth_weekday(year, 1, 0, 3),    # Martin Luther King Jr. Day
         _nth_weekday(year, 2, 0, 3),    # Presidents' Day
         easter(year) - timedelta(days=2),  # Good Friday
         _nth_weekday(year, 5, 0, -1),   # Memorial Day
@@ -108,6 +110,8 @@ def nyse_holidays(year: int) -> frozenset[date]:
         _nth_weekday(year, 11, 3, 4),   # Thanksgiving
         _observed(date(year, 12, 25)),
     }
+    if year >= 1998:
+        days.add(_nth_weekday(year, 1, 0, 3))  # Martin Luther King Jr. Day, NYSE from 1998
     # NYSE does not close on Friday 31 Dec when New Year's Day is a Saturday.
     new_year = date(year, 1, 1)
     if new_year.weekday() != 5:

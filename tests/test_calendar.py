@@ -92,13 +92,32 @@ def test_nyse_trading_days_in_2024():
     assert NYSE.business_days_between(date(2024, 3, 28), date(2024, 4, 1)) == 1  # Good Friday
 
 
-def test_business_days_matches_brute_force():
-    start = date(2022, 11, 20)
+@pytest.mark.parametrize("start", [
+    date(2022, 11, 20),
+    date(2021, 12, 1),   # 31 Dec 2021 is observed for New Year's Day 2022
+    date(2010, 12, 1),   # same for 2011
+    date(2016, 12, 20),  # New Year's Day 2017 on a Sunday
+    date(2018, 11, 25),  # December 2018 closures
+    date(2024, 12, 15),
+])
+def test_business_days_matches_brute_force(start):
     for cal in (SEC, NYSE):
-        for span in range(0, 60):
+        for span in range(0, 800, 7):
             end = start + timedelta(days=span)
             brute = sum(cal.is_business_day(start + timedelta(days=i)) for i in range(1, span + 1))
             assert cal.business_days_between(start, end) == brute, (cal.name, end)
+
+
+def test_holiday_sets_only_hold_their_own_year():
+    for year in range(1990, 2031):
+        assert all(d.year == year for d in federal_holidays(year) | nyse_holidays(year))
+
+
+def test_new_year_observed_on_friday_counts_once():
+    # 31 Dec 2021 (Fri) was the federal holiday for 1 Jan 2022 (Sat).
+    assert SEC.business_days_between(date(2021, 12, 30), date(2022, 1, 3)) == 1
+    # A real trade whose lag the SQL cross-check caught one day short before the fix.
+    assert SEC.business_days_between(date(2021, 3, 17), date(2023, 1, 26)) == 465
 
 
 def test_on_or_before_and_add():

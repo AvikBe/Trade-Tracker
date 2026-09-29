@@ -12,7 +12,7 @@ from tradetracker.features import compute as fc
 from tradetracker.features.compute import (
     PriceSeries,
     TradeInput,
-    _LogHistogram,
+    _RankTree,
     compute,
     drift_pct,
     filing_date,
@@ -110,8 +110,8 @@ def test_drift_is_trade_close_to_filing_close_for_buys():
 
 
 def test_drift_sign_flips_for_sells():
-    up = trade(date(2024, 3, 4), date(2024, 3, 6), side="sell")
-    down = trade(date(2024, 3, 4), date(2024, 3, 7), side="sell")
+    up = trade(date(2024, 3, 4), date(2024, 3, 6), side="sell", filer=21)
+    down = trade(date(2024, 3, 4), date(2024, 3, 7), side="sell", filer=22)
     rows = run([up, down], PRICES)
     assert rows[up.trade_id].drift_pct == pytest.approx(-10.0)   # rose after a sale
     assert rows[down.trade_id].drift_pct == pytest.approx(10.0)  # fell: move already captured
@@ -231,24 +231,28 @@ def test_size_falls_back_to_trailing_year_market_rank():
     much_later = trade(date(2024, 3, 4), date(2024, 3, 4), filer=998, shares=51, price=100)
     rows = run(crowd + [newcomer, much_later])
     assert rows[newcomer.trade_id].size_basis == "market"
-    assert rows[newcomer.trade_id].size_score == pytest.approx(0.2525, abs=0.01)
+    assert rows[newcomer.trade_id].size_score == pytest.approx(50.5 / 200)
     # The crowd is over a year old by then and has dropped out of the window.
     assert rows[much_later.trade_id].size_score is None
 
 
-def test_log_histogram_rank_tracks_exact_percentile():
+def test_rank_tree_is_exact_under_adds_and_removes():
     rng = random.Random(4)
-    values = [10 ** rng.uniform(3, 8) for _ in range(5000)]
-    h = _LogHistogram()
+    # Round-dollar trades pile up on the same values, which is where approximations fail.
+    values = [rng.choice([10_000, 25_000, 50_000, 100_000]) if rng.random() < 0.3
+              else round(10 ** rng.uniform(3, 8), 2) for _ in range(5000)]
+    tree = _RankTree(values + [1.0])
     for v in values:
-        h.add(v)
+        tree.add(v)
     ordered = sorted(values)
-    for q in (1e3, 5e4, 1e6, 3e7, 1e8, 1e12, 0.5):
-        assert h.rank(q) == pytest.approx(percentile(ordered, q), abs=0.01)
+    for q in values[:200] + [1.0, 10_000, 25_000, 50_000, 100_000]:
+        assert tree.rank(q) == pytest.approx(percentile(ordered, q), abs=1e-12)
     for v in values[:2500]:
-        h.remove(v)
-    assert h.total == 2500
-    assert h.rank(1e6) == pytest.approx(percentile(sorted(values[2500:]), 1e6), abs=0.01)
+        tree.remove(v)
+    rest = sorted(values[2500:])
+    assert tree.total == 2500
+    for q in values[2500:2700] + [25_000]:
+        assert tree.rank(q) == pytest.approx(percentile(rest, q), abs=1e-12)
 
 
 def test_zero_price_trade_is_flagged_no_value():
@@ -391,6 +395,55 @@ def test_amendment_correcting_the_trade_date_is_linked_by_size_and_price():
     assert r.duplicate_of_trade_id == orig.trade_id and r.flags[0] == "amendment_correction"
     # Public since the original filing; the lag uses the corrected trade date.
     assert r.filing_date == date(2024, 3, 7) and r.lag_days == 3
+
+
+def test_same_trade_in_two_ordinary_filings_by_one_filer_counts_once():
+    # Real case (RMCF, Feb 2024): two joint filers each filed a Form 4 for the same buy.
+    a1 = trade(date(2024, 2, 20), date(2024, 2, 22), filing=800, filer=13, shares=500)
+    a2 = trade(date(2024, 2, 20), date(2024, 2, 22), filing=800, filer=13, shares=500)
+    b1 = trade(date(2024, 2, 20), date(2024, 2, 22), filing=801, filer=13, shares=500)
+    b2 = trade(date(2024, 2, 20), date(2024, 2, 22), filing=801, filer=13, shares=500)
+    b3 = trade(date(2024, 2, 20), date(2024, 2, 22), filing=801, filer=13, shares=500)
+    later = trade(date(2024, 2, 20), date(2024, 2, 27), filing=802, filer=13, shares=500)
+    other_filer = trade(date(2024, 2, 20), date(2024, 2, 22), filing=803, filer=14, shares=500)
+    other_size = trade(date(2024, 2, 20), date(2024, 2, 22), filing=804, filer=13, shares=501)
+    rows = run([a1, a2, b1, b2, b3, later, other_filer, other_size])
+    # Identical lines inside one filing are separate lots and stay.
+    assert rows[a1.trade_id].duplicate_of_trade_id is None
+    assert rows[a2.trade_id].duplicate_of_trade_id is None
+    assert rows[b1.trade_id].duplicate_of_trade_id == a1.trade_id
+    assert rows[b2.trade_id].duplicate_of_trade_id == a2.trade_id
+    assert rows[b3.trade_id].duplicate_of_trade_id is None  # a third lot the first filing lacks
+    assert rows[b1.trade_id].flags[0] == "duplicate_filing"
+    # A re-filing days later is public since the first one.
+    assert rows[later.trade_id].duplicate_of_trade_id == a1.trade_id
+    assert rows[later.trade_id].filing_date == date(2024, 2, 22)
+    assert rows[other_filer.trade_id].duplicate_of_trade_id is None
+    assert rows[other_size.trade_id].duplicate_of_trade_id is None
+    assert rows[other_filer.trade_id].cluster_count == 2
+
+
+def test_duplicate_matching_follows_line_order_not_ids():
+    # Two identical original lines and a 4/A that repeats one and corrects the other.
+    def build(ids):
+        o1 = trade(date(2024, 3, 4), date(2024, 3, 6), filing=900, filer=15, tid=ids[0])
+        o2 = trade(date(2024, 3, 4), date(2024, 3, 6), filing=900, filer=15, tid=ids[1])
+        o1.line_no, o2.line_no = 0, 1
+        a1 = trade(date(2024, 3, 4), date(2024, 3, 20), filing=901, filer=15, doc="4/A",
+                   amends=900, shares=150, tid=ids[2])
+        a2 = trade(date(2024, 3, 4), date(2024, 3, 20), filing=901, filer=15, doc="4/A",
+                   amends=900, tid=ids[3])
+        a1.line_no, a2.line_no = 0, 1
+        rows = run([a2, o2, a1, o1])
+        return {k: (rows[t.trade_id].flags[0], rows[t.trade_id].duplicate_of_trade_id)
+                for k, t in (("a1", a1), ("a2", a2))}, (o1.trade_id, o2.trade_id)
+
+    first, (o1, _) = build([50001, 50002, 50003, 50004])
+    second, (o1b, _) = build([60004, 60003, 60002, 60001])  # ids in reverse line order
+    assert first["a2"] == ("amendment_duplicate", o1)
+    assert first["a1"][0] == "amendment_correction"
+    assert second["a2"] == ("amendment_duplicate", o1b)
+    assert second["a1"][0] == "amendment_correction"
 
 
 def test_unlinked_amendment_is_flagged_but_kept():

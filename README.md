@@ -68,8 +68,10 @@ filing date is before (z-score, size) or on (clusters) this trade's filing date.
 | `size_score` | dollar size percentile vs the filer's own earlier same-side trades (5+), else vs all same-side trades of the past year (`size_basis`) |
 | `cluster_count` | distinct insiders trading the same ticker and side within 14 days, known by this filing date |
 
-Amendment lines that repeat or correct an original line keep the original filing date,
-point at it through `duplicate_of_trade_id`, and never count twice in any history.
+Amendment lines that repeat or correct an original line, and exact repeats of a trade the
+same filer already disclosed in another Form 4 (joint filers filing separately), keep the
+first filing date, point at the first line through `duplicate_of_trade_id`, and never
+count twice in any history.
 `flags` records why a value is missing (`no_prices`, `no_trade_price`, `trade_after_filing`, ...)
 and marks `10b5_1` and amendment trades.
 

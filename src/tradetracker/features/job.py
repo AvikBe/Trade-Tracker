@@ -10,7 +10,7 @@ from .compute import FEATURE_VERSION, EASTERN, FeatureRow, PriceSeries, TradeInp
 TRADES_SQL = """
     SELECT t.trade_id, t.filing_id, f.filer_id, f.source, coalesce(f.document_type, ''),
            f.amends_filing_id, f.filed_at, t.ticker, t.side, t.trade_date,
-           t.shares, t.price, t.amount_low, t.amount_high, t.role, t.is_10b5_1
+           t.shares, t.price, t.amount_low, t.amount_high, t.role, t.is_10b5_1, t.line_no
     FROM trades t JOIN filings f USING (filing_id)
 """
 
