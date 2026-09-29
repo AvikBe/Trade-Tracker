@@ -52,8 +52,33 @@ queues backfills before updates, so run it hourly until the backlog clears.
 ## Tests
 
 ```sh
-pytest                                          # parser tests
+pytest                                          # parser, client and CLI tests
 TT_TEST_DATABASE_URL=postgresql://... pytest    # plus database tests (drops the schema!)
+TT_LIVE=1 pytest -m live                        # smoke tests against live SEC and Tiingo
 ```
 
-Fixtures are synthetic files in SEC's formats, not real filings.
+CI runs everything except the live tests, against Postgres 16.
+
+`tests/fixtures/real/` holds real SEC filings: an eight-filing cut of the 2024q1 data set
+and the matching XML documents. The bulk and XML parsers are tested to agree on them.
+The other fixtures are synthetic.
+
+## Known data quirks
+
+Found by loading 2015q1, 2018q3, 2020q1, 2022q4, 2023q4, 2024q1 and 2026q2 and
+cross-checking 260 filings against their XML:
+
+- The data sets round shares and prices to two decimals (half up). The XML keeps
+  full precision, so live-feed rows are more exact than bulk rows.
+- Within a data set, an amendment can be listed before its original. `load-bulk` and
+  `poll-edgar` finish with a relink pass that matches on owner, issuer and period,
+  or on the original's filing date that each 4/A states. With 2023q4 and 2024q1
+  loaded, 1,109 of 1,122 2024q1 amendments are linked or amend a pre-October 2023
+  filing. Amendments of filings older than the loaded history stay unlinked, and
+  `tt report` shows how many.
+- Joint filings list their owners in a different order in the two sources, so both
+  parsers pick the most senior owner, then the lowest CIK.
+- Row order in the data sets is not document order, and the ownership nature
+  (spouse, trust) is sometimes on the wrong row. Side, date, shares and price agree.
+- Filers type tickers like `NONE`, `(SIRI)`, `NYSE: SCS` or `Z AND ZG`; they are
+  normalized, and placeholders are left for `tt map-tickers`.
