@@ -85,6 +85,24 @@ def test_queue_orders_benchmarks_quarters_then_buys(cache):
     assert q[len(BENCHMARKS):] == ["CCC", "BBB", "AAA", "OLD"]
 
 
+def test_queue_groups_put_buy_tickers_before_sell_only_ones():
+    u = universe(
+        ("2024q1", "SELL1", 0, 40),
+        ("2024q1", "BUY1", 1, 1),
+        ("2023q4", "BUY2", 5, 5),
+        ("2023q4", "SELL2", 0, 90),
+        ("2023q4", "SELL1", 0, 1),
+        ("2015q1", "OLDB", 7, 7),
+        ("2015q1", "OLDS", 0, 70),
+        ("2015q1", "SELL2", 2, 2),  # buys only in a later group: stays sell-only in group 1
+    )
+    order = pc.parse_order("2024q1,2023q4|2015q1")
+    assert order == [["2024q1", "2023q4"], ["2015q1"]]
+    q = pc.queue(u, {}, order, T0)[len(BENCHMARKS):]
+    assert q == ["BUY1", "BUY2", "SELL1", "SELL2", "OLDB", "OLDS"]
+    assert pc.flat(order) == ["2024q1", "2023q4", "2015q1"]
+
+
 def test_queue_skips_done_and_waits_before_retrying_errors(cache):
     status = {
         "CCC": {"status": "ok"},

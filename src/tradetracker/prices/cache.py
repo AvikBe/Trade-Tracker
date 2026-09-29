@@ -204,16 +204,38 @@ def budget(calls: list[Call], now: datetime) -> Budget:
     )
 
 
-def queue(universe: list[dict], status: dict[str, dict], order: list[str], now: datetime) -> list[str]:
+def parse_order(spec: str) -> list[list[str]]:
+    """'2024q1,2023q4|2015q1' -> [['2024q1', '2023q4'], ['2015q1']]."""
+    return [[q.strip() for q in g.split(",") if q.strip()] for g in spec.split("|") if g.strip()]
+
+
+def flat(order) -> list[str]:
+    return [q for g in order for q in g] if order and isinstance(order[0], list) else list(order)
+
+
+def queue(universe: list[dict], status: dict[str, dict], order, now: datetime) -> list[str]:
     """Tickers still to fetch, in priority order.
 
-    Benchmarks first, then quarters in `order`, and within a quarter by buy count, then
-    trade count, since buys are what the tracker ranks. Each ticker appears once, under
-    its highest-priority quarter. Errors wait RETRY_AFTER before another attempt.
+    `order` is a list of quarters, or of groups of quarters (see parse_order). Benchmarks
+    come first; then, group by group, tickers with buys in that group (quarters in order,
+    most buys first), then the group's sell-only tickers. Buys are what the tracker ranks,
+    so the monthly symbol quota goes to them first. Each ticker appears once, and errors
+    wait RETRY_AFTER before another attempt.
     """
-    rank = {q: i for i, q in enumerate(order)}
-    rows = [r for r in universe if r["quarter"] in rank]
-    rows.sort(key=lambda r: (rank[r["quarter"]], -r["buys"], -r["trades"], r["ticker"]))
+    groups = order if order and isinstance(order[0], list) else [list(order)]
+    where = {q: (g, i) for g, qs in enumerate(groups) for i, q in enumerate(qs)}
+    rows = [r for r in universe if r["quarter"] in where]
+    has_buys = {(where[r["quarter"]][0], r["ticker"]) for r in rows if r["buys"] > 0}
+    rows.sort(
+        key=lambda r: (
+            where[r["quarter"]][0],
+            (where[r["quarter"]][0], r["ticker"]) not in has_buys,
+            where[r["quarter"]][1],
+            -r["buys"],
+            -r["trades"],
+            r["ticker"],
+        )
+    )
     out, seen = [], set()
     for t in [*BENCHMARKS, *(r["ticker"] for r in rows)]:
         if t in seen:
@@ -328,7 +350,7 @@ def coverage(cache: PriceCache, order: list[str]) -> list[dict]:
     for r in cache.universe():
         by_q[r["quarter"]].append(r)
     out = []
-    for q in order:
+    for q in flat(order):
         rows = by_q.get(q, [])
         if not rows:
             continue

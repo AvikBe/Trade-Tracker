@@ -128,10 +128,9 @@ def cmd_load_prices(args, settings):
     print(stats)
 
 
-# Most recent first for the quarters the phase 2 report used, then the other loaded ones.
-PRICE_ORDER = (
-    "2024q1,2023q4,2023q3,2023q2,2023q1,2026q2,2022q4,2020q1,2018q3,2015q1"
-)
+# The quarters the phase 2 report used, most recent first, then the other loaded ones.
+# Within each |-separated group, tickers with buys come before sell-only tickers.
+PRICE_ORDER = "2024q1,2023q4,2023q3,2023q2,2023q1|2026q2,2022q4,2020q1,2018q3,2015q1"
 
 
 def _price_cache(args) -> price_cache.PriceCache:
@@ -151,7 +150,7 @@ def cmd_fetch_prices(args, settings):
     cache = _price_cache(args)
     client = TiingoClient(settings.require_tiingo())
     try:
-        stats = price_cache.run(cache, client, args.order.split(","), limit=args.limit)
+        stats = price_cache.run(cache, client, price_cache.parse_order(args.order), limit=args.limit)
     finally:
         client.close()
     print(stats)
@@ -166,7 +165,7 @@ def cmd_import_prices(args, settings):
 
 def cmd_price_coverage(args, settings):
     cache = _price_cache(args)
-    print(price_cache.coverage_report(cache, args.order.split(","), price_cache.utcnow()))
+    print(price_cache.coverage_report(cache, price_cache.parse_order(args.order), price_cache.utcnow()))
 
 
 def cmd_validate(args, settings):
@@ -222,7 +221,7 @@ def main(argv: list[str] | None = None) -> int:
     ]:
         pc = sub.add_parser(name, help=text)
         pc.add_argument("--cache", help="cache directory (default $TT_PRICE_CACHE or data/price-cache)")
-        pc.add_argument("--order", default=PRICE_ORDER, help="quarter priority, comma separated")
+        pc.add_argument("--order", default=PRICE_ORDER, help="quarter priority: comma separated, groups split by |")
         pc.add_argument("--limit", type=int, help="max requests this run")
         pc.set_defaults(fn=fn)
 
