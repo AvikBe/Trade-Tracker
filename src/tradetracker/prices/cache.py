@@ -36,9 +36,10 @@ from .loader import BENCHMARKS, HISTORY_START
 from .tiingo import AuthError, RateLimited, TickerNotFound
 
 # Headroom under the free plan (50/hour, 1,000/day, 500 symbols/month) for manual calls.
-HOURLY_BUDGET = 45
-DAILY_BUDGET = 950
-MONTHLY_SYMBOL_BUDGET = 480
+# A paid plan raises them through TT_TIINGO_HOURLY / _DAILY / _SYMBOLS.
+HOURLY_BUDGET = int(os.environ.get("TT_TIINGO_HOURLY", 45))
+DAILY_BUDGET = int(os.environ.get("TT_TIINGO_DAILY", 950))
+MONTHLY_SYMBOL_BUDGET = int(os.environ.get("TT_TIINGO_SYMBOLS", 480))
 MAX_ATTEMPTS = 3
 RETRY_AFTER = timedelta(hours=1)
 LOCK_STALE = timedelta(minutes=50)
