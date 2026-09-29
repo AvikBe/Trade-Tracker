@@ -136,3 +136,57 @@ def test_report_on_real_events(results, tmp_path):
     assert "Buys (open-market purchases, no 10b5-1)" in text
     study.write_events(res, tmp_path / "events.csv.gz")
     assert (tmp_path / "events.csv.gz").stat().st_size > 0
+
+
+def _snapshot(r, horizons=(5, 20)):
+    o = r.outcome
+    return (o.status, o.entry, o.drift_pct, o.price_ratio, o.dollar_volume, o.benchmark,
+            {h: dict(o.legs[h]) for h in horizons if h in o.legs})
+
+
+def test_cutting_prices_after_a_date_changes_no_earlier_result(results, tmp_path):
+    """Truncate every price file at 1 Apr 2024: events whose 20-day exit is earlier match."""
+    import gzip
+
+    res, _ = results
+    (tmp_path / "bars").mkdir()
+    for f in (REAL / "backtest_bars" / "bars").glob("*.csv.gz"):
+        lines = gzip.decompress(f.read_bytes()).decode().splitlines()
+        keep = [lines[0]] + [x for x in lines[1:] if x[:10] < "2024-04-01"]
+        (tmp_path / "bars" / f.name).write_bytes(gzip.compress("\n".join(keep).encode()))
+    cut = prices.CachePrices(tmp_path)
+    again = study.run_study([r.event for r in res], cut,
+                            sectors.load_sic(REAL / "backtest_sic.csv"))
+    checked = 0
+    for a, b in zip(res, again):
+        if a.outcome.legs[20]["exit"] < date(2024, 4, 1):
+            assert _snapshot(a) == _snapshot(b)
+            checked += 1
+        else:
+            assert 60 not in b.outcome.legs
+    assert checked >= 25
+
+
+def test_filings_made_later_change_no_earlier_event(conn):
+    """Load only filings up to 14 Feb, then everything: events up to 14 Feb match."""
+    filings = list(parse_quarter(REAL / "2024q1_features_form345.zip"))
+    src = prices.CachePrices(REAL / "backtest_bars")
+    sic = sectors.load_sic(REAL / "backtest_sic.csv")
+
+    def run(fs):
+        conn.execute("TRUNCATE trades, filings, filers, trade_features CASCADE")
+        for f in fs:
+            store.save_filing(conn, f)
+        store.link_amendments(conn)
+        conn.commit()
+        job.run(conn, recompute=True, as_of=date(2024, 3, 28))
+        evs, _ = events.load_events(conn)
+        return {(r.event.ticker, r.event.side, r.event.filing_date, r.event.first_trade_date,
+                 r.event.n_lines, round(r.event.value, 2)): _snapshot(r)
+                for r in study.run_study(evs, src, sic)}
+
+    early = run([f for f in filings if f.filed_at.date() <= date(2024, 2, 14)])
+    full = run(filings)
+    assert len(early) >= 15
+    for k, v in early.items():
+        assert full[k] == v

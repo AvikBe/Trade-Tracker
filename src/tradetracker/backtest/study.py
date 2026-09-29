@@ -312,6 +312,73 @@ def ended_early_share(results: list[Result], h: int) -> tuple[int, int]:
     return sum("ended_early" in leg["flags"] for leg in legs), len(legs)
 
 
+# ---------------------------------------------------------------- source comparison
+
+def _key(x: Result) -> tuple:
+    e = x.event
+    return (e.filer_id, e.ticker, e.side, e.filing_date)
+
+
+def source_comparison(primary: list[Result], other: list[Result], primary_name: str,
+                      other_name: str, h: int = PRIMARY_H) -> list[str]:
+    """How much do results depend on the price vendor, and on delisted names?
+
+    Compares the two sources on the events both can price, then uses the second
+    source's coverage of names the first is missing (mostly delisted) to measure
+    survivorship: are the events the primary source cannot see different?
+    """
+    a = {_key(x): x for x in primary}
+    b = {_key(x): x for x in other}
+    both = [(a[k], b[k]) for k in a.keys() & b.keys()
+            if a[k].ok and b[k].ok and a[k].r(h) is not None and b[k].r(h) is not None]
+    lines = [f"## Price source check: {primary_name} vs {other_name}", ""]
+    if not both:
+        return lines + ["No events priced by both sources.", ""]
+    diffs = sorted(abs(x.outcome.legs[h]["stock"] - y.outcome.legs[h]["stock"]) for x, y in both)
+    ra = [x.r(h) for x, _ in both]
+    rb = [y.r(h) for _, y in both]
+    within = sum(d <= 0.005 for d in diffs) / len(diffs)
+    lines.append(
+        f"Events priced by both: {len(both)}. {h}-day stock return: median absolute "
+        f"difference {pct(diffs[len(diffs) // 2], 3)}, {100 * within:.1f}% within 0.5 pp, "
+        f"correlation of excess returns {num(stats.pearson(ra, rb), 3)}. Mean excess vs SPY "
+        f"{pct(sum(ra) / len(ra))} ({primary_name}) vs {pct(sum(rb) / len(rb))} ({other_name}).")
+    mism = Counter((a[k].outcome.status, b[k].outcome.status) for k in a.keys() & b.keys()
+                   if a[k].outcome.status != b[k].outcome.status)
+    if mism:
+        lines.append("Status disagreements (primary, other): " + ", ".join(
+            f"{p}/{o} {n}" for (p, o), n in mism.most_common(8)) + ".")
+    lines.append("")
+
+    buys = lambda rs: [x for x in rs if x.ok and x.event.side == "buy"  # noqa: E731
+                       and not x.event.is_10b5_1 and x.r(h) is not None]
+    other_buys = buys(other)
+    seen = {_key(x) for x in buys(primary)}
+    missing = [x for x in other_buys if _key(x) not in seen]
+    present = [x for x in other_buys if _key(x) in seen]
+    rows = []
+    for label, rs in [(f"priced by {primary_name} too", present),
+                      (f"missing from {primary_name}", missing),
+                      (f"all {other_name} buys", other_buys)]:
+        vals, keys = _values(rs, h)
+        s = stats.summarize(vals, keys)
+        early, legs = ended_early_share(rs, h)
+        rows.append([label, s.n, pct(s.mean), num(s.t_cluster), pct(s.median), pct(s.hit, 1),
+                     f"{early} of {legs}"])
+    lines.append(f"**Survivorship: {other_name} buy events, {h}-day excess vs SPY**\n")
+    lines.append(table(["events", "n", "mean", "t (clustered)", "median", "hit rate",
+                        "history ends before exit"], rows))
+    lines.append("")
+    lines.append(f"**{other_name} buys by lag, {h} days**\n")
+    lag = by_lag(other_buys)
+    vals = [v for x in other_buys if (v := x.r(h)) is not None]
+    w = stats.winsor_cutoffs(vals) if vals else None
+    lines.append(table(SUMMARY_HEADERS, [summary_row(LAG_BUCKETS[i][0], lag.get(i, []), h, w)
+                                         for i in range(len(LAG_BUCKETS))]))
+    lines.append("")
+    return lines
+
+
 # ---------------------------------------------------------------- report
 
 def dedupe_ticker_day(results: list[Result]) -> list[Result]:

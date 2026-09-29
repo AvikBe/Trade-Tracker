@@ -428,3 +428,25 @@ def test_report_renders_on_synthetic_results():
     text = study.render(rs, Exclusions(), "synthetic")
     assert "## Buys (open-market purchases, no 10b5-1)" in text
     assert "very late (5+ days, >2x)" in text and "Walk-forward" in text
+
+
+def test_source_comparison_measures_agreement_and_survivorship():
+    rng = random.Random(11)
+    a, b = [], []
+    for i in range(200):
+        entry = NYSE.add(date(2020, 1, 2), i)
+        r = rng.gauss(0.01, 0.05)
+        x = _result(entry, 2, 1.0, r)
+        x.event.filer_id = i
+        y = _result(entry, 2, 1.0, r + 0.001)
+        y.event.filer_id = i
+        if i % 4 == 0:   # the primary source lacks a quarter of the names (delisted)
+            x.outcome.status = "no_prices"
+            y.outcome.legs[20]["stock"] = -0.2
+        a.append(x)
+        b.append(y)
+    text = "\n".join(study.source_comparison(a, b, "yahoo", "tiingo"))
+    assert "Events priced by both: 150" in text
+    assert "100.0% within 0.5 pp" in text
+    assert "| missing from yahoo | 50 |" in text
+    assert "no_prices/ok 50" in text

@@ -174,9 +174,15 @@ def cmd_backtest(args, settings):
     with db.connect(settings.database_url) as conn:
         source = prices.open_source(args.prices, conn)
         evs, exclusions = events.load_events(conn)
-        results = study.run_study(evs, source, sectors.load_sic(Path(args.sic)) if args.sic else {})
+        sic = sectors.load_sic(Path(args.sic)) if args.sic else {}
+        results = study.run_study(evs, source, sic)
+        extra = []
+        if args.compare:
+            other = prices.open_source(args.compare, conn)
+            extra = study.source_comparison(results, study.run_study(evs, other, sic),
+                                            source.name, other.name)
     study.write_events(results, out / "events.csv.gz")
-    (out / "report.md").write_text(study.render(results, exclusions, source.name))
+    (out / "report.md").write_text(study.render(results, exclusions, source.name, extra))
     ok = sum(r.ok for r in results)
     print(f"{len(results)} events, {ok} with returns; wrote {out / 'report.md'}")
 
@@ -236,6 +242,7 @@ def main(argv: list[str] | None = None) -> int:
     bt.add_argument("--prices", required=True,
                     help="'db', 'db:<source>', or a cache directory (Tiingo layout)")
     bt.add_argument("--sic", help="SIC CSV from fetch-sic (sector benchmarks)")
+    bt.add_argument("--compare", help="a second price source to check the first against")
     bt.add_argument("--out", required=True, help="directory for report.md and events.csv.gz")
     bt.set_defaults(fn=cmd_backtest)
 
