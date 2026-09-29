@@ -11,7 +11,7 @@ This is milestone 1, the data foundation, on a free stack:
 | Form 4 history, 2015 onward | SEC quarterly Insider Transactions Data Sets | free |
 | Form 4 live | EDGAR latest-filings feed + filing XML | free |
 | CIK to ticker | ticker printed on each filing, then SEC `company_tickers.json` | free |
-| Daily prices incl. delisted | Tiingo free tier (50 req/hour, 1,000/day) | free |
+| Daily prices incl. delisted | Tiingo free tier (50 req/hour, 1,000/day, 500 symbols/month) | free |
 | Congress trades | deferred until the insider backtest shows the signal holds | n/a |
 
 ## Setup
@@ -39,6 +39,35 @@ tt feature-report                       # feature coverage and distributions
 
 `load-prices` spends at most the remaining hourly and daily Tiingo quota per run and
 queues backfills before updates, so run it hourly until the backlog clears.
+
+## Price cache (hourly backfill without a shared database)
+
+Tiingo's free plan allows only **500 unique symbols a month**, besides 50 requests an
+hour and 1,000 a day, so a quarter's ~2,700 tickers take months, not days. The backfill
+therefore runs as an hourly job that keeps its state in a directory (`--cache` or
+`$TT_PRICE_CACHE`) rather than in Postgres, so any session can resume it:
+
+```sh
+tt price-universe --cache DIR     # from the trades table: quarter,ticker,buys,trades
+tt fetch-prices --cache DIR       # hourly: fetch what the quotas allow, write coverage.txt
+tt price-coverage --cache DIR     # tickers and trades covered per quarter
+tt import-prices --cache DIR      # copy the cache into daily_prices (idempotent)
+```
+
+- Each ticker is fetched once, as CSV from 2014-01-01 (about 280 KB), and serves every
+  quarter it appears in.
+- Order: SPY and the sector ETFs, then quarters by `--order` (default 2024q1 back to
+  2023q1, then 2026q2, 2022q4, 2020q1, 2018q3, 2015q1), and within a quarter by buy
+  count, so the monthly symbol quota covers as many buys as possible.
+- Budgets keep headroom: 45 calls an hour, 950 a day and 480 new symbols per calendar
+  month (UTC), counted from `calls.csv`. A quota refusal from Tiingo stops the run and
+  sets a cooldown (55 minutes, 6 hours, or 24 hours for the symbol quota).
+- Unknown tickers are marked `not_found`, tickers with no bars since 2014 `empty`, and
+  network or server errors are retried an hour apart, three attempts in all.
+- Coverage counts a ticker for a quarter only when its bars span that quarter, which
+  catches tickers delisted earlier or reused by a later company.
+- `fetch-prices` and `load-prices` share one API key but not one call log, so don't run
+  `load-prices` while the hourly job is active.
 
 ## What gets stored
 
