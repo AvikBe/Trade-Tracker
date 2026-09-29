@@ -79,3 +79,9 @@ def test_ceo_amendment_with_open_market_buys():
 def test_both_parsers_read_the_original_filing_date_of_an_amendment():
     assert BULK["0001493152-24-004448"].original_filed_on == date(2024, 1, 25)
     assert _xml("0001493152-24-004448").original_filed_on == date(2024, 1, 25)
+
+
+def test_both_parsers_keep_every_joint_owner():
+    want = ["1385702", "1426156", "1426157", "1760572"]  # Kaufman and three MAK funds
+    assert BULK["0001019056-24-000015"].owner_ciks == want
+    assert _xml("0001019056-24-000015").owner_ciks == want

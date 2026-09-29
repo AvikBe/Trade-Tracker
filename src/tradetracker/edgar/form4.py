@@ -138,6 +138,7 @@ def parse_form4(
         issuer_ticker=clean_ticker(_text(root, "issuer/issuerTradingSymbol")),
         period_of_report=period,
         original_filed_on=_date(_text(root, "dateOfOriginalSubmission")),
+        owner_ciks=sorted({(o[1] or "").lstrip("0") for o in owners if (o[1] or "").strip("0")}),
         filed_at=filed_at,
         accepted_at=accepted_at,
         source_url=source_url,
