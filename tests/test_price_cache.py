@@ -326,6 +326,12 @@ def test_daily_csv_errors(status, body, exc, kind):
         assert e.value.kind == kind
 
 
+def test_daily_csv_empty_list_means_no_bars():
+    # Tiingo's real reply for a known symbol with no bars since the start date (KFS).
+    text = client_for(200, "[]").daily_csv("KFS", date(2014, 1, 1))
+    assert text.startswith("date,") and parse_csv("KFS", text) == []
+
+
 def test_json_daily_still_raises_not_found_and_limits():
     with pytest.raises(TickerNotFound):
         client_for(200, '{"detail":"Error: Ticker \'X\' not found"}').daily("X", date(2024, 1, 1))

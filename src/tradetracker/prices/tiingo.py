@@ -142,6 +142,8 @@ class TiingoClient:
         resp = self._http.get(f"{BASE}/{symbol(ticker)}/prices", params=params)
         _raise_for_error(ticker, resp)
         text = resp.text
+        if text.strip() in ("", "[]"):  # a known symbol with no bars in the window
+            return "date," + CSV_COLUMNS.split(",", 1)[1] + "\n"
         if not text.startswith("date,"):
             raise httpx.HTTPStatusError(
                 f"unexpected body: {text[:200]!r}", request=resp.request, response=resp
