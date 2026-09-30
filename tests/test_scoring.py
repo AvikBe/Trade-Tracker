@@ -494,7 +494,7 @@ def test_rank_hides_run_ups_stale_and_illiquid_filings_and_applies_decay():
     assert [r.result.event.ticker for r in out] == ["A"]
     assert out[0].result.event.role == "CEO"
     assert hidden == {"drift": 1, "illiquid": 2, "no_prices": 0, "ticker_mismatch": 0,
-                      "10b5-1": 1}
+                      "10b5-1": 1, "small_cap": 0}
     d = NYSE.business_days_between(fresh, as_of)
     assert out[0].days_since_filing == d
     assert out[0].score == pytest.approx(1.0 * M.Model.decay(m, d))

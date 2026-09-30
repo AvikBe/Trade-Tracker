@@ -152,3 +152,39 @@ def test_independent_recomputation_agrees(scored, tmp_path, monkeypatch):
     xc = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(xc)
     assert xc.run_checks(out, REAL / "backtest_bars", os.environ["TT_TEST_DATABASE_URL"]) == []
+
+
+def test_cli_cap_floor_hedged_run_and_its_cross_check(scored, tmp_path, monkeypatch):
+    """The new-approach flags on real filings: RMCF ($26.5M on 15 Feb 2024) falls under
+    the $50M floor, and the cross-check rebuilds every market cap, beta and volatility."""
+    import csv
+    import json
+    import gzip
+    import importlib.util
+    import os
+
+    pytest.importorskip("pandas")
+    pytest.importorskip("scipy")
+    from tradetracker import cli
+
+    monkeypatch.setenv("DATABASE_URL", os.environ["TT_TEST_DATABASE_URL"])
+    out = tmp_path / "run"
+    shares = REAL / "shares_outstanding.csv"
+    assert cli.main(["score-backtest", "--prices", str(REAL / "backtest_bars"), "--sic",
+                     str(REAL / "backtest_sic.csv"), "--out", str(out), "--no-ablation",
+                     "--shares", str(shares), "--min-cap", "50", "--bench", "beta",
+                     "--vol-target", "0.4", "--name", "cap floor, vol control"]) == 0
+    rows = list(csv.DictReader(gzip.open(out / "pool.csv.gz", "rt")))
+    tickers = {r["ticker"] for r in rows}
+    assert "RMCF" not in tickers and {"PLCE", "CTBI"} <= tickers
+    assert all(float(r["market_cap"]) >= 50e6 for r in rows)
+    summary = json.loads((out / "summary.json").read_text())
+    assert summary["config"] == {"name": "cap floor, vol control", "h": 20, "bench": "beta",
+                                 "min_cap": 50e6, "vol_target": 0.4}
+    assert "cap >= $50M" in (out / "report.md").read_text()
+    path = Path(__file__).parents[1] / "scripts" / "crosscheck_scoring.py"
+    spec = importlib.util.spec_from_file_location("crosscheck_scoring", path)
+    xc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(xc)
+    assert xc.run_checks(out, REAL / "backtest_bars", os.environ["TT_TEST_DATABASE_URL"],
+                         shares=shares) == []

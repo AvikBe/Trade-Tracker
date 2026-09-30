@@ -13,6 +13,10 @@ what scoring needs beyond them, each from data public before the event's entry:
   sessions (0 at a 52-week high, -0.5 when the stock has halved).
 - `track_record`: the insider's mean 20-day excess return on earlier buys whose exit
   was before this entry, when there are at least `TRACK_MIN_EVENTS` of them.
+- `market_cap`: shares outstanding known at entry (SEC XBRL, see `fundamentals`) x the
+  last close before entry. None without a share count.
+- `beta` and `vol`: against SPY and annualized, from daily closes over the 250 sessions
+  before entry (at least 60). They size and hedge positions; they aren't in Q.
 - `dollar_volume` and `drift` are the backtest's own (median over the 20 sessions
   before entry, and trade date to last close before entry).
 """
@@ -25,6 +29,7 @@ from dataclasses import dataclass
 from datetime import date, timedelta
 
 from ..backtest.study import PRIMARY_H, Result
+from ..fundamentals import market_cap
 
 REPEAT_WINDOW_DAYS = 730
 DRAWDOWN_SESSIONS = 250
@@ -45,6 +50,9 @@ class Signals:
     track_n: int
     dollar_volume: float | None
     drift: float | None          # fraction, in the trade's direction
+    market_cap: float | None = None
+    beta: float | None = None    # vs SPY, daily returns over the 250 sessions before entry
+    vol: float | None = None     # annualized, same window
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)
@@ -70,6 +78,32 @@ def drawdown(prices, ticker: str, entry: date) -> float | None:
     return bars.bars[i].adj_close / peak - 1
 
 
+def risk(prices, ticker: str, entry: date) -> tuple[float | None, float | None]:
+    """(beta vs SPY, annualized volatility) from daily closes before entry."""
+    bars, spy = prices.get(ticker), prices.get("SPY")
+    if bars is None or spy is None:
+        return None, None
+    i = bars.index_before(entry)
+    if i is None or i < DRAWDOWN_MIN_SESSIONS:
+        return None, None
+    window = bars.bars[max(0, i - DRAWDOWN_SESSIONS): i + 1]
+    xs, ys = [], []
+    for a, b in zip(window, window[1:]):
+        sa, sb = spy.at(a.date), spy.at(b.date)
+        if sa is None or sb is None:
+            continue
+        ys.append(b.adj_close / a.adj_close - 1)
+        xs.append(sb.adj_close / sa.adj_close - 1)
+    if len(ys) < DRAWDOWN_MIN_SESSIONS - 1:
+        return None, None
+    n = len(ys)
+    mx, my = sum(xs) / n, sum(ys) / n
+    vx = sum((x - mx) ** 2 for x in xs) / (n - 1)
+    vy = sum((y - my) ** 2 for y in ys) / (n - 1)
+    cov = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / (n - 1)
+    return (cov / vx if vx > 0 else None), (vy ** 0.5) * 252 ** 0.5
+
+
 class _History:
     """Earlier events per key, for 'what was known before date d' lookups."""
 
@@ -92,7 +126,7 @@ class _History:
         return self.values.get(key, [])[: bisect.bisect_left(ds, d)]
 
 
-def build(results: list[Result], prices, h: int = PRIMARY_H) -> list[Signals]:
+def build(results: list[Result], prices, h: int = PRIMARY_H, shares=None) -> list[Signals]:
     """Signals for every result, aligned with `results`.
 
     `results` must hold every event the history features should see (all buys, not just
@@ -118,6 +152,7 @@ def build(results: list[Result], prices, h: int = PRIMARY_H) -> list[Signals]:
                                  e.filing_date) if e.side == "buy" else 0
         tr_vals = track.before(e.filer_id, o.entry or e.entry_date)
         tr = sum(tr_vals) / len(tr_vals) if len(tr_vals) >= TRACK_MIN_EVENTS else None
+        beta, vol = risk(prices, e.ticker, o.entry) if o.entry else (None, None)
         out.append(Signals(
             role=e.role,
             value=e.value,
@@ -129,5 +164,9 @@ def build(results: list[Result], prices, h: int = PRIMARY_H) -> list[Signals]:
             track_n=len(tr_vals),
             dollar_volume=o.dollar_volume,
             drift=None if o.drift_pct is None else o.drift_pct / 100,
+            market_cap=(market_cap(shares, e.issuer_cik, prices.get(e.ticker), o.entry)
+                        if o.entry else None),
+            beta=beta,
+            vol=vol,
         ))
     return out

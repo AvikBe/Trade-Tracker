@@ -40,6 +40,8 @@ tt fetch-yahoo --cache prices-yahoo     # research prices (Tiingo cache layout),
 tt backtest --prices DIR|db --sic sic.csv --out results/   # the first study
 tt score-backtest --prices DIR --sic sic.csv --out results/   # milestone 4: fit and test the score
 tt rank --model results/model.json --prices DIR [--as-of DATE]  # top 20 recent buys, with reasons
+tt fetch-shares --out shares.csv        # SEC share counts, for the market-cap floor
+tt score-backtest ... --shares shares.csv --min-cap 50 --horizon 60 --bench beta --vol-target 0.4 --variants
 ```
 
 `load-prices` spends at most the remaining hourly and daily Tiingo quota per run and
@@ -151,8 +153,8 @@ walk-forward; `tt rank` applies the fitted `model.json` to recent filings.
     score = Q x exp(-lambda x d) x max(0, 1 - beta x drift)      (P = 1: lag is not used)
 
 - **Sample (what the tracker shows):** open-market buys, no 10b5-1 plan, entry at least
-  $2, median dollar volume at least $100k (a stand-in for the spec's $50M market cap,
-  since share counts aren't loaded), drift at most 20%, filed within 30 sessions.
+  $2, median dollar volume at least $100k, drift at most 20%, filed within 30 sessions,
+  and with `--min-cap` the spec's market-cap floor (below).
 - **Q components**, each bucketed at fixed round-number edges: insider role; trade value;
   stake change (shares bought over shares held before, per account, from the Form 4's
   "owned following" column, stored as `trades.shares_owned_after` by migration 005);
@@ -176,7 +178,28 @@ walk-forward; `tt rank` applies the fitted `model.json` to recent filings.
 
 `scripts/crosscheck_scoring.py` recomputes a run without `tradetracker.scoring`: stake
 change from SQL, repeat buys, track records and drawdowns with pandas, every score from
-its fold's model, each fold's tables and weights (scipy), and the portfolio.
+its fold's model, each fold's tables and weights (scipy), and the portfolio. With
+`--shares` it also rebuilds market caps, betas and volatilities from the raw bars.
+
+### Market cap, longer holds and volatility control
+
+Phase 4's score failed the spec's go-live criteria, so the backtest also tests setups
+around the same model (`--variants` compares five of them in one report):
+
+- **Market-cap floor** (`--shares`, `--min-cap 50`): `tt fetch-shares --out FILE` pulls
+  `dei:EntityCommonStockSharesOutstanding` for every filer from the SEC XBRL frames API
+  (one call per quarter, cached in a CSV). A count dated E is used only from E + 100 days,
+  after any 10-K or 10-Q deadline, so the backtest never sees one before it was public.
+  Market cap = that count x the last raw close before entry, scaled by any split since
+  the count (from the raw/adjusted close ratio). Events with an unknown cap are hidden
+  when a floor is set. `tt rank --shares FILE` applies the floor as of the ranking day.
+- **Longer holds** (`--horizon 60`): the model is fitted and judged on 60-session
+  returns, purged by the 60-session exit. The spec's 1% bar is per 20 days, so a 60-day
+  mean is scaled by 20/60 before it's compared.
+- **Beta hedge** (`--bench beta`): returns are the stock minus beta x SPY, with beta from
+  up to 250 daily returns before entry (at least 60; clipped to 0-3, 1 when unknown).
+- **Volatility-scaled positions** (`--vol-target 0.4`): in the top-20 portfolio a
+  position is vol_target / its annualized volatility of a slot, at most 2 slots.
 
 ## Tests
 

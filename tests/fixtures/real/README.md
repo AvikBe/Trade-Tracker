@@ -15,3 +15,9 @@ Feature tests (`tests/test_features_real.py`):
   filers who filed the same buys twice plus two 4/As that correct one line.
 - `2024q1_features_prices.csv`: Tiingo adjusted closes for those four tickers over the
   same weeks, cross-checked against Yahoo Finance.
+
+Market-cap tests (`tests/test_capvol.py`):
+
+- `shares_outstanding.csv`: the `dei:EntityCommonStockSharesOutstanding` facts for PLCE,
+  CTBI, RMCF and NBIX dated Oct 2022 to May 2024, cut unchanged from the SEC XBRL frames
+  that `tt fetch-shares` downloads (`CY2022Q4I` to `CY2024Q1I`).
