@@ -35,6 +35,9 @@ tt validate                             # spec validation rules -> rejects table
 tt report                               # exit check: coverage per year, lag histogram
 tt features [--all]                     # milestone 2: fill trade_features (see below)
 tt feature-report                       # feature coverage and distributions
+tt fetch-sic --out sic.csv              # milestone 3: issuer SIC codes, for sector benchmarks
+tt fetch-yahoo --cache prices-yahoo     # research prices (Tiingo cache layout), see below
+tt backtest --prices DIR|db --sic sic.csv --out results/   # the first study
 ```
 
 `load-prices` spends at most the remaining hourly and daily Tiingo quota per run and
@@ -74,6 +77,39 @@ first filing date, point at the first line through `duplicate_of_trade_id`, and 
 count twice in any history.
 `flags` records why a value is missing (`no_prices`, `no_trade_price`, `trade_after_filing`, ...)
 and marks `10b5_1` and amendment trades.
+
+## Backtest (milestone 3)
+
+`tt backtest` answers the spec's first question: does the forward return from the
+filing date depend on disclosure lag and pre-disclosure drift? It writes `report.md`
+and one row per event to `events.csv.gz`.
+
+- **Event:** one insider's trades in one stock on one side disclosed on one filing
+  date. Amendment lines and repeat filings (`duplicate_of_trade_id`) are left out, so
+  nothing counts twice; so are other 4/A lines, whose dates describe the correction.
+- **Entry:** the open of the first trading day after the filing date. Form 4s count as
+  filed that day until 10 pm, so a same-day open could precede the filing. With an
+  EDGAR acceptance time, entry is that day's open if accepted before 9:30, else the
+  next day's.
+- **Exit:** the close h trading days after entry (h = 5, 20, 60), held h sessions.
+  A stock whose history ends first exits at its last close (`ended_early`).
+- **Returns:** adjusted open to adjusted close, minus SPY (primary), the sector SPDR
+  from the issuer's SIC code (`tt fetch-sic`), and IWM over the same days. Signed so a
+  positive number means the insider was right, for sells too. Net returns subtract
+  10 bps per side plus a half-spread of 2 to 150 bps tiered by dollar volume.
+- **Point in time:** drift ends at the last close before entry; the ticker check
+  (Form 4 price within 0.5x to 2x of the vendor's raw close, which catches reused
+  tickers) and the liquidity estimate use only bars before entry.
+- **Statistics:** t-stats are reported plain and clustered by entry month (quarter for
+  60 days). The walk-forward fits bucket means on all earlier years, drops training
+  events that exit inside the test year, and tests on the next year.
+
+Prices are pluggable (`--prices`): `db` or `db:<source>` reads `daily_prices`; a
+directory reads `bars/<T>.csv.gz` in the Tiingo cache layout, which both the hourly
+Tiingo routine and `tt fetch-yahoo` write. Yahoo is free and broad but has no
+delisted symbols, so the report shows coverage per year and the Tiingo subset is the
+survivorship cross-check. `scripts/crosscheck_backtest.py` recomputes a run
+independently (pandas and `exchange_calendars`).
 
 ## Tests
 
