@@ -365,9 +365,12 @@ def source_comparison(primary: list[Result], other: list[Result], primary_name: 
     missing = [x for x in other_buys if _key(x) not in seen]
     present = [x for x in other_buys if _key(x) in seen]
     rows = []
+    liquid = lambda rs: [x for x in rs if x.liquid]  # noqa: E731
     for label, rs in [(f"priced by {primary_name} too", present),
                       (f"missing from {primary_name}", missing),
-                      (f"all {other_name} buys", other_buys)]:
+                      (f"all {other_name} buys", other_buys),
+                      (f"liquid, priced by {primary_name} too", liquid(present)),
+                      (f"liquid, missing from {primary_name}", liquid(missing))]:
         vals, keys = _values(rs, h)
         s = stats.summarize(vals, keys)
         early, legs = ended_early_share(rs, h)
