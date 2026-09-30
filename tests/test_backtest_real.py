@@ -40,10 +40,11 @@ def _find(res, ticker, filing_date, **kw):
 
 def test_sample_counts_leave_out_amendments_and_repeat_filings(results):
     res, ex = results
-    # 99 lines: 15 restate an earlier line (RMCF joint filers, 4/A repeats), 10 more are
-    # 4/A lines; the other 74 lines make 32 events.
+    # 99 lines: 25 restate an earlier line (RMCF joint filers, 4/A repeats, and the 10 PLCE
+    # 4/A lines filed under the other joint owner, linked since migration 004); the other
+    # 74 lines make 32 events.
     assert ex.counts["lines"] == 99
-    assert ex.counts["duplicate"] == 15 and ex.counts["amendment"] == 10
+    assert ex.counts["duplicate"] == 25 and ex.counts["amendment"] == 0
     assert len(res) == ex.counts["events"] == 32
     assert all(r.ok for r in res)
 
