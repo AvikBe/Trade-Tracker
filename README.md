@@ -38,6 +38,8 @@ tt feature-report                       # feature coverage and distributions
 tt fetch-sic --out sic.csv              # milestone 3: issuer SIC codes, for sector benchmarks
 tt fetch-yahoo --cache prices-yahoo     # research prices (Tiingo cache layout), see below
 tt backtest --prices DIR|db --sic sic.csv --out results/   # the first study
+tt score-backtest --prices DIR --sic sic.csv --out results/   # milestone 4: fit and test the score
+tt rank --model results/model.json --prices DIR [--as-of DATE]  # top 20 recent buys, with reasons
 ```
 
 `load-prices` spends at most the remaining hourly and daily Tiingo quota per run and
@@ -140,6 +142,41 @@ Tiingo routine and `tt fetch-yahoo` write. Yahoo is free and broad but has no
 delisted symbols, so the report shows coverage per year and the Tiingo subset is the
 survivorship cross-check. `scripts/crosscheck_backtest.py` recomputes a run
 independently (pandas and `exchange_calendars`).
+
+## Scoring (milestone 4)
+
+`tt score-backtest` fits the spec's v1 score on the backtest's events and tests it
+walk-forward; `tt rank` applies the fitted `model.json` to recent filings.
+
+    score = Q x exp(-lambda x d) x max(0, 1 - beta x drift)      (P = 1: lag is not used)
+
+- **Sample (what the tracker shows):** open-market buys, no 10b5-1 plan, entry at least
+  $2, median dollar volume at least $100k (a stand-in for the spec's $50M market cap,
+  since share counts aren't loaded), drift at most 20%, filed within 30 sessions.
+- **Q components**, each bucketed at fixed round-number edges: insider role; trade value;
+  stake change (shares bought over shares held before, per account, from the Form 4's
+  "owned following" column, stored as `trades.shares_owned_after` by migration 005);
+  cluster size; repeat buys by the same insider in the stock over the past two years;
+  the stock's distance from its 52-week high; the insider's track record (mean 20-day
+  excess of earlier buys that had exited); and dollar volume.
+- **Fit:** each bucket's value is its mean training return (20-day excess over SPY, net
+  of costs, winsorized at 1%/99%) minus the overall mean, shrunk by n / (n + 500).
+  Weights come from least squares bounded to [0, 1]; beta is the grid value with the
+  best training top-decile return. Q is scaled to 0 to 1 by the best and worst possible
+  bucket combinations. Weights, tables and beta are all in `model.json`.
+- **Walk-forward:** each year from 2017 is scored by a model fitted only on earlier
+  events whose exits fell before 1 January. "Above cutoff" means a score at or above the
+  training top-decile score, which is what a live alert would use. One stock bought by
+  several insiders on a day counts once (the best-scored insider).
+- **Report:** the spec's four go-live criteria, results by year and period, 5/20/60 days
+  against SPY, the sector ETF and IWM, a top-20 portfolio (equal slots, 20-session holds,
+  costs at entry and exit, idle slots in SPY), the edge when entry is late (which sets
+  lambda when the edge is significant), component weights per fold, and an ablation
+  dropping one component at a time.
+
+`scripts/crosscheck_scoring.py` recomputes a run without `tradetracker.scoring`: stake
+change from SQL, repeat buys, track records and drawdowns with pandas, every score from
+its fold's model, each fold's tables and weights (scipy), and the portfolio.
 
 ## Tests
 

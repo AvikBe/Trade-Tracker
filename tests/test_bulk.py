@@ -35,6 +35,7 @@ def test_parse_quarter(tmp_path):
     assert f.issuer_cik == "1234567" and f.issuer_ticker == "EXWD"
     assert f.role == "CFO"
     assert [t.txn_code for t in f.trades] == ["P"]  # F (tax withholding) dropped
+    assert f.trades[0].shares_owned_after is None   # column absent from this fixture
     assert f.source_url.endswith("/1234567/000000000124000001/0000000001-24-000001-index.htm")
 
     other = filings["0000000001-24-000003"]

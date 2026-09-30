@@ -14,7 +14,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pandas>=2", "scipy>=1.11"]  # pandas, scipy: cross-check scripts
 
 [project.scripts]
 tt = "tradetracker.cli:main"

@@ -19,6 +19,8 @@ def test_open_market_buys_are_kept_and_other_codes_dropped():
     assert first.line_no == 0 and second.line_no == 2
     assert first.side == "buy"
     assert first.shares == Decimal("10000") and first.price == Decimal("12.34")
+    assert first.shares_owned_after == Decimal("50000")
+    assert second.shares_owned_after == Decimal("2500")
     assert first.trade_date == date(2024, 3, 4)
     assert first.owner == "self"
     assert second.owner == "spouse"

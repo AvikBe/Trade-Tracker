@@ -1,0 +1,524 @@
+"""Phase 4 backtest: does the score pick buys that clear costs out of sample?
+
+Walk-forward by year, as in phase 3: fit the model on every earlier year (purged, so no
+training return overlaps the test year) and score the test year with it. Pooled over
+the test years, this gives the spec's go-live metrics:
+
+- mean 20-day excess return over SPY, net of costs, of the top-decile scores, and the
+  number of test years in which it is positive;
+- the hit rate (share of those buys that beat SPY over 20 days);
+- the information ratio and drawdown of a top-20 portfolio that buys each day's signals
+  above the training top-decile cutoff and holds them for 20 sessions;
+- the same split into 2017-2022 and 2023-2026, an ablation that drops one component at
+  a time, and what is left of the edge when entry comes d sessions late (the decay).
+
+The sample is what the tracker would show: open-market buys, no 10b5-1 plan, liquid
+(entry at least $2, median dollar volume at least $100k), drift at most 20%. One stock
+bought by several insiders the same day is one position: the best-scored event is kept.
+"""
+
+from __future__ import annotations
+
+import csv
+import gzip
+import io
+import math
+from collections import defaultdict
+from dataclasses import dataclass
+from datetime import date
+from pathlib import Path
+
+from ..backtest import stats
+from ..backtest.returns import HORIZONS
+from ..backtest.study import PRIMARY_H, Result, num, pct, table
+from . import model as M
+from .signals import Signals
+
+MAX_DRIFT_SHOWN = 0.20
+MIN_TRAIN_YEARS = 2
+PORTFOLIO_SLOTS = 20
+DELAYS = (0, 1, 2, 3, 5, 10)
+PERIODS = [("2017-2022", 2017, 2022), ("2023-2026", 2023, 2026)]
+
+
+def shown(x: Result, s: Signals) -> bool:
+    """Would the tracker list this event? (The spec's hide rules, and the liquid sample.)"""
+    e = x.event
+    return (x.ok and e.side == "buy" and not e.is_10b5_1 and x.liquid
+            and (s.drift is None or s.drift <= MAX_DRIFT_SHOWN))
+
+
+@dataclass
+class Scored:
+    result: Result
+    signals: Signals
+    score: float
+    quality: float
+    year: int
+    above: bool          # at or above the training top-decile cutoff
+
+    def r(self, h: int = PRIMARY_H, bench: str = "spy", net: bool = False):
+        return self.result.r(h, bench, net)
+
+
+@dataclass
+class Fold:
+    year: int
+    model: M.Model
+    n_train: int
+    scored: list[Scored]
+
+
+def training_set(pool, h, start):
+    xs, ss, ys = [], [], []
+    for x, s in pool:
+        v = x.r(h, net=True)
+        if v is not None and x.outcome.legs[h]["exit"] < start:
+            xs.append(x)
+            ss.append(s)
+            ys.append(v)
+    return xs, ss, ys
+
+
+def dedupe(scored: list[Scored]) -> list[Scored]:
+    """One entry per stock and entry day: the best-scored insider's."""
+    best: dict[tuple, Scored] = {}
+    for x in scored:
+        k = (x.result.event.ticker, x.result.outcome.entry)
+        if k not in best or x.score > best[k].score:
+            best[k] = x
+    return sorted(best.values(), key=lambda x: (x.result.outcome.entry, -x.score,
+                                                x.result.event.ticker))
+
+
+def walk_forward(results: list[Result], signals: list[Signals], h: int = PRIMARY_H,
+                 components: list[str] | None = None, beta: float | None = None,
+                 min_train_years: int = MIN_TRAIN_YEARS) -> list[Fold]:
+    pool = [(x, s) for x, s in zip(results, signals) if shown(x, s)]
+    years = sorted({x.outcome.entry.year for x, _ in pool})
+    folds = []
+    for y in years[min_train_years:]:
+        _, ss, ys = training_set(pool, h, date(y, 1, 1))
+        if len(ys) < 500:
+            continue
+        m = M.fit(ss, ys, label=f"before {y}", components=components, beta=beta)
+        test = []
+        for x, s in pool:
+            if x.outcome.entry.year == y:
+                sc = m.score(s)
+                test.append(Scored(x, s, sc, m.quality(s), y, sc >= m.threshold))
+        folds.append(Fold(y, m, len(ys), dedupe(test)))
+    return folds
+
+
+# ---------------------------------------------------------------- metrics
+
+def _summ(rows: list[Scored], h: int = PRIMARY_H, bench: str = "spy", net: bool = True):
+    vals, keys = [], []
+    for x in rows:
+        v = x.r(h, bench, net)
+        if v is not None:
+            vals.append(v)
+            keys.append(stats.cluster_key(x.result.outcome.entry, h))
+    return stats.summarize(vals, keys)
+
+
+def top_decile_by_rank(rows: list[Scored]) -> list[Scored]:
+    k = max(1, len(rows) // 10)
+    return sorted(rows, key=lambda x: -x.score)[:k]
+
+
+def hit_rate(rows: list[Scored], h: int = PRIMARY_H) -> float | None:
+    v = [x.r(h) for x in rows if x.r(h) is not None]
+    return sum(r > 0 for r in v) / len(v) if v else None
+
+
+def year_table(folds: list[Fold]) -> tuple[str, dict]:
+    rows, pooled_top, pooled_all, pooled_rank = [], [], [], []
+    yearly = []
+    for f in folds:
+        top = [x for x in f.scored if x.above]
+        rank = top_decile_by_rank(f.scored)
+        s_all, s_top, s_rank = _summ(f.scored), _summ(top), _summ(rank)
+        ic = stats.spearman([x.score for x in f.scored if x.r(PRIMARY_H, net=True) is not None],
+                            [x.r(PRIMARY_H, net=True) for x in f.scored
+                             if x.r(PRIMARY_H, net=True) is not None])
+        yearly.append(s_top.mean)
+        rows.append([f.year, f.n_train, s_all.n, pct(s_all.mean), s_top.n, pct(s_top.mean),
+                     num(s_top.t_cluster), pct(hit_rate(top), 1), pct(s_rank.mean),
+                     num(ic, 3), num(f.model.beta, 1)])
+        pooled_top += top
+        pooled_all += f.scored
+        pooled_rank += rank
+    return (table(["test year", "train n", "shown", "all, net", "above cutoff",
+                   "their net mean", "t (clustered)", "hit rate", "top 10% by rank, net",
+                   "rank IC", "beta"], rows),
+            {"top": pooled_top, "all": pooled_all, "rank": pooled_rank, "yearly": yearly})
+
+
+# ---------------------------------------------------------------- portfolio
+
+def _daily(bars, d: date, first: bool) -> float | None:
+    b = bars.at(d)
+    if b is None:
+        return None
+    if first:
+        return b.adj_close / b.adj_open - 1 if b.adj_open else None
+    i = bars.index_before(d)
+    return b.adj_close / bars.bars[i].adj_close - 1 if i is not None else None
+
+
+@dataclass
+class Portfolio:
+    days: list[date]
+    excess: list[float]        # daily excess over SPY, after costs
+    spy: list[float]
+    positions: list[int]
+    trades: int
+
+    def ir(self) -> float | None:
+        if len(self.excess) < 20:
+            return None
+        m = sum(self.excess) / len(self.excess)
+        sd = math.sqrt(sum((v - m) ** 2 for v in self.excess) / (len(self.excess) - 1))
+        return m / sd * math.sqrt(252) if sd > 0 else None
+
+    def annual_excess(self) -> float:
+        return sum(self.excess) / len(self.excess) * 252 if self.excess else 0.0
+
+    @staticmethod
+    def max_drawdown(rets: list[float]) -> float:
+        peak = level = 1.0
+        worst = 0.0
+        for r in rets:
+            level *= 1 + r
+            peak = max(peak, level)
+            worst = min(worst, level / peak - 1)
+        return worst
+
+    def mdd(self) -> float:
+        return self.max_drawdown([s + e for s, e in zip(self.spy, self.excess)])
+
+    def spy_mdd(self) -> float:
+        return self.max_drawdown(self.spy)
+
+
+def simulate(candidates: list[Scored], prices, h: int = PRIMARY_H,
+             slots: int = PORTFOLIO_SLOTS) -> Portfolio:
+    """Equal-weight slots; each position 1/slots of the book, held h sessions.
+
+    Empty slots sit in SPY, so the book's excess over SPY is the mean of held positions'
+    daily excess times their weight. Costs (the event's round trip) are charged half at
+    entry and half at exit. A stock with no bar on a day contributes 0 that day.
+    """
+    spy = prices.get("SPY")
+    by_day: dict[date, list[Scored]] = defaultdict(list)
+    for x in candidates:
+        by_day[x.result.outcome.entry].append(x)
+    if not by_day:
+        return Portfolio([], [], [], [], 0)
+    start = min(by_day)
+    end = max(leg["exit"] for x in candidates if (leg := x.result.outcome.legs.get(h)))
+    days = [d for d in spy.dates if start <= d <= end]
+    held: list[tuple[Scored, date]] = []      # (position, exit day)
+    out = Portfolio([], [], [], [], 0)
+    for d in days:
+        todays = sorted(by_day.get(d, []), key=lambda x: -x.score)
+        tickers = {p.result.event.ticker for p, _ in held}
+        for x in todays:
+            leg = x.result.outcome.legs.get(h)
+            if len(held) >= slots or leg is None or x.result.event.ticker in tickers:
+                continue
+            held.append((x, leg["exit"]))
+            tickers.add(x.result.event.ticker)
+            out.trades += 1
+        spy_r = _daily(spy, d, False) or 0.0
+        total = 0.0
+        for p, exit_day in held:
+            e = p.result.event
+            first = d == p.result.outcome.entry
+            bars = prices.get(e.ticker)
+            r = _daily(bars, d, first) if bars is not None else None
+            spy_leg = (_daily(spy, d, True) if first else spy_r) or 0.0
+            ex = (r - spy_leg) if r is not None else 0.0
+            cost = p.result.outcome.cost or 0.0
+            if first:
+                ex -= cost / 2
+            if d == exit_day:
+                ex -= cost / 2
+            total += ex
+        out.days.append(d)
+        out.excess.append(total / slots)
+        out.spy.append(spy_r)
+        out.positions.append(len(held))
+        held = [(p, x) for p, x in held if x > d]
+    while out.positions and out.positions[-1] == 0:   # a rejected candidate's tail
+        for series in (out.days, out.excess, out.spy, out.positions):
+            series.pop()
+    return out
+
+
+def portfolio_by_year(pf: Portfolio) -> str:
+    rows = []
+    years = sorted({d.year for d in pf.days})
+    for y in years:
+        ex = [e for d, e in zip(pf.days, pf.excess) if d.year == y]
+        sp = [s for d, s in zip(pf.days, pf.spy) if d.year == y]
+        pos = [p for d, p in zip(pf.days, pf.positions) if d.year == y]
+        sub = Portfolio([], ex, sp, pos, 0)
+        rows.append([y, len(ex), num(sum(pos) / len(pos), 1), pct(sub.annual_excess()),
+                     num(sub.ir()), pct(sub.mdd()), pct(sub.spy_mdd())])
+    return table(["year", "days", "avg positions", "excess vs SPY (annualized)", "IR",
+                  "max drawdown", "SPY max drawdown"], rows)
+
+
+# ---------------------------------------------------------------- decay
+
+def delayed_excess(x: Scored, prices, delay: int, h: int = PRIMARY_H) -> float | None:
+    """Excess over SPY (net of costs) when entry comes `delay` sessions late."""
+    bars = prices.get(x.result.event.ticker)
+    spy = prices.get("SPY")
+    entry = x.result.outcome.entry
+    if bars is None:
+        return None
+    i = bars.index_on_or_after(entry)
+    if i is None or i + delay + h - 1 >= len(bars):
+        return None
+    a, b = bars.bars[i + delay], bars.bars[i + delay + h - 1]
+    si, sj = spy.index_on_or_after(a.date), spy.index_on_or_before(b.date)
+    if si is None or sj is None or spy.dates[si] != a.date or not a.adj_open:
+        return None
+    s = spy.bars[sj].adj_close / spy.bars[si].adj_open - 1
+    return b.adj_close / a.adj_open - 1 - s - (x.result.outcome.cost or 0.0)
+
+
+def decay_table(top: list[Scored], prices, h: int = PRIMARY_H) -> tuple[str, float | None]:
+    means = {}
+    rows = []
+    for d in DELAYS:
+        v = [r for x in top if (r := delayed_excess(x, prices, d, h)) is not None]
+        s = stats.summarize(v)
+        means[d] = s.mean
+        rows.append([d, s.n, pct(s.mean), num(s.t)])
+    half = None
+    base = means.get(0)
+    base_t = stats.summarize([r for x in top if (r := delayed_excess(x, prices, 0, h)) is not None]).t
+    # A half-life is only worth fitting to an edge that is there (t >= 2 undelayed).
+    if base is not None and base > 0 and base_t is not None and base_t >= 2:
+        for d in DELAYS[1:]:
+            if means[d] is not None and means[d] <= base / 2:
+                half = d
+                break
+    return table(["entry delay (sessions)", "n", f"{h}-day net excess vs SPY", "t"], rows), half
+
+
+# ---------------------------------------------------------------- report
+
+def weights_table(folds: list[Fold]) -> str:
+    names = list(M.COMPONENTS)
+    rows = [[f.year] + [num(1e4 * f.model.weights.get(c, 0.0) *
+                            (max(f.model.tables[c].values()) - min(f.model.tables[c].values())), 0)
+                        if c in f.model.weights else "" for c in names]
+            + [num(f.model.beta, 1)] for f in folds]
+    return table(["test year"] + names + ["beta"], rows)
+
+
+def model_tables(m: M.Model) -> str:
+    parts = []
+    for c, (_, labels) in M.COMPONENTS.items():
+        if c not in m.tables:
+            continue
+        rows = [[b, m.counts[c].get(b, 0), pct(m.tables[c].get(b)),
+                 pct(m.weights[c] * m.tables[c][b]) if b in m.tables[c] else ""]
+                for b in labels if b in m.counts[c]]
+        parts.append(f"**{c}** (weight {num(m.weights[c], 3)})\n")
+        parts.append(table(["bucket", "train n", "bucket value (shrunk)", "weighted"], rows))
+        parts.append("")
+    return "\n".join(parts)
+
+
+def criteria(pooled: dict, pf: Portfolio) -> tuple[str, list[bool]]:
+    s = _summ(pooled["top"])
+    yearly = [v for v in pooled["yearly"] if v is not None]
+    pos = sum(v > 0 for v in yearly)
+    hit = hit_rate(pooled["top"])
+    ir = pf.ir()
+    mdd, smdd = pf.mdd(), pf.spy_mdd()
+    ratio = mdd / smdd if smdd < 0 else None
+    checks = [
+        (s.mean is not None and s.mean > 0.01 and pos > len(yearly) / 2,
+         "20-day excess return, top-decile scores", "above 1% after costs, positive in most "
+         "test years", f"{pct(s.mean)} (t {num(s.t_cluster)}), positive in {pos} of {len(yearly)}"),
+        (ir is not None and ir > 0.5, "Information ratio, top-20 portfolio",
+         "above 0.5 out of sample", num(ir)),
+        (hit is not None and hit > 0.55, "Hit rate (beats SPY over 20 days)", "above 55%",
+         pct(hit, 1)),
+        (ratio is not None and ratio <= 1.5, "Max drawdown vs SPY", "no worse than 1.5x",
+         f"{pct(mdd)} vs SPY {pct(smdd)} ({num(ratio)}x)"),
+    ]
+    rows = [[name, target, got, "pass" if ok else "fail"] for ok, name, target, got in checks]
+    return table(["metric", "target", "out of sample", ""], rows), [c[0] for c in checks]
+
+
+def ablation(results, signals, base_top) -> str:
+    rows = []
+    b = _summ(base_top)
+    rows.append(["all components", b.n, pct(b.mean), num(b.t_cluster)])
+    variants = [(f"without {c}", [n for n in M.COMPONENTS if n != c], None)
+                for c in M.COMPONENTS]
+    variants.append(("no drift penalty (beta 0)", None, 0.0))
+    for label, comps, beta in variants:
+        folds = walk_forward(results, signals, components=comps, beta=beta)
+        top = [x for f in folds for x in f.scored if x.above]
+        s = _summ(top)
+        rows.append([label, s.n, pct(s.mean), num(s.t_cluster)])
+    return table(["model", "above cutoff", "net mean, 20 days", "t (clustered)"], rows)
+
+
+def render(results: list[Result], signals: list[Signals], prices, final: M.Model,
+           source_name: str, run_ablation: bool = True) -> tuple[str, list[Fold], Portfolio]:
+    folds = walk_forward(results, signals)
+    ytable, pooled = year_table(folds)
+    candidates = [x for f in folds for x in f.scored if x.above]
+    pf = simulate(candidates, prices)
+    crit, _ = criteria(pooled, pf)
+    pool_n = sum(1 for x, s in zip(results, signals) if shown(x, s))
+
+    lines = [
+        "# Phase 4 backtest: the score, out of sample",
+        "",
+        f"Price source: **{source_name}**. Score = Q x max(0, 1 - beta x drift), with no "
+        "promptness weight (P = 1). Walk-forward: each test year is scored by a model fitted "
+        "only on earlier years whose 20-day exits fell before the test year began. Returns "
+        "are 20-day excess over SPY after costs unless a column says otherwise.",
+        "",
+        f"Shown events (liquid open-market buys, no 10b5-1, drift <= 20%): {pool_n}. "
+        f"Test years: {', '.join(str(f.year) for f in folds)}.",
+        "",
+        "## Spec go-live criteria",
+        "",
+        crit,
+        "",
+        "## By test year",
+        "",
+        "\"Above cutoff\" is what the live tracker would flag: a score at or above the "
+        "training years' top-decile score. \"Top 10% by rank\" ranks within the test year, "
+        "which uses the year's own distribution and so is not tradable, but shows ordering.",
+        "",
+        ytable,
+        "",
+    ]
+    rows = []
+    for label, lo, hi in PERIODS:
+        top = [x for x in pooled["top"] if lo <= x.year <= hi]
+        al = [x for x in pooled["all"] if lo <= x.year <= hi]
+        st, sa = _summ(top), _summ(al)
+        rows.append([label, sa.n, pct(sa.mean), st.n, pct(st.mean), num(st.t_cluster),
+                     pct(hit_rate(top), 1)])
+    lines += ["## By period", "", table(["period", "shown", "all, net", "above cutoff",
+                                         "their net mean", "t (clustered)", "hit rate"], rows), ""]
+
+    rows = []
+    for h in HORIZONS:
+        for bench in ("spy", "sector", "iwm"):
+            g, n = _summ(pooled["top"], h, bench, net=False), _summ(pooled["top"], h, bench)
+            a = _summ(pooled["all"], h, bench)
+            rows.append([h, bench.upper() if bench != "sector" else "sector ETF",
+                         g.n, pct(g.mean), pct(n.mean), num(n.t_cluster), pct(a.mean)])
+    lines += ["## Above-cutoff buys by horizon and benchmark", "",
+              table(["days", "benchmark", "n", "gross", "net", "t (clustered)",
+                     "all shown, net"], rows), ""]
+
+    lines += ["## Top-20 portfolio", "",
+              f"{pf.trades} positions over {len(pf.days)} sessions; average "
+              f"{num(sum(pf.positions) / max(1, len(pf.positions)), 1)} of "
+              f"{PORTFOLIO_SLOTS} slots filled. Annualized excess over SPY "
+              f"{pct(pf.annual_excess())}, information ratio {num(pf.ir())}.", "",
+              portfolio_by_year(pf), ""]
+
+    dtable, half = decay_table(pooled["top"], prices)
+    lines += ["## Decay: entering late", "",
+              "Above-cutoff buys, entered d sessions after the first possible open and held "
+              f"{PRIMARY_H} sessions. The spec's lambda sets the half-life of this edge.", "",
+              dtable, "",
+              (f"The edge halves by a delay of {half} sessions." if half is not None else
+               "No half-life was fitted (the undelayed edge is not significantly positive, "
+               f"t < 2, or never halves); the model keeps the spec's {M.DEFAULT_HALF_LIFE}-"
+               "session start value."), ""]
+
+    lines += ["## Component weights by fold", "",
+              "Each cell is the component's spread in basis points: weight x (best bucket - "
+              "worst bucket). 0 means the fold dropped it.", "", weights_table(folds), ""]
+    if run_ablation:
+        lines += ["## Ablation: drop one component", "",
+                  ablation(results, signals, pooled["top"]), ""]
+    lines += [f"## Final model (fitted on all years, {final.n_train} events)", "",
+              f"beta {num(final.beta, 1)}, half-life {num(final.half_life, 0)} sessions, "
+              f"top-decile cutoff {num(final.threshold, 3)}.", "", model_tables(final)]
+    return "\n".join(lines), folds, pf
+
+
+def summary(folds: list[Fold], pf: Portfolio) -> dict:
+    """Headline numbers, for the cross-check script and later comparison."""
+    out = {"years": {}, "portfolio": {"ir": pf.ir(), "annual_excess": pf.annual_excess(),
+                                      "mdd": pf.mdd(), "spy_mdd": pf.spy_mdd(),
+                                      "trades": pf.trades, "days": len(pf.days)}}
+    for f in folds:
+        top = [x for x in f.scored if x.above]
+        s = _summ(top)
+        out["years"][str(f.year)] = {"shown": len(f.scored), "above": s.n, "net_mean": s.mean,
+                                     "hit": hit_rate(top), "beta": f.model.beta,
+                                     "threshold": f.model.threshold, "n_train": f.n_train}
+    pooled = [x for f in folds for x in f.scored if x.above]
+    s = _summ(pooled)
+    out["pooled"] = {"above": s.n, "net_mean": s.mean, "t_cluster": s.t_cluster,
+                     "hit": hit_rate(pooled)}
+    return out
+
+
+def fit_final(results, signals, h: int = PRIMARY_H, half_life: float | None = None) -> M.Model:
+    pool = [(x, s) for x, s in zip(results, signals) if shown(x, s)]
+    _, ss, ys = training_set(pool, h, date.max)
+    m = M.fit(ss, ys, label="all years")
+    if half_life:
+        m.half_life = half_life
+    return m
+
+
+SCORED_COLUMNS = ["year", "filer_id", "ticker", "filing_date", "entry", "exit_20", "score",
+                  "quality", "above", "role", "value", "stake_change", "cluster_count", "repeat_buys",
+                  "drawdown", "track_record", "track_n", "dollar_volume", "drift", "cost",
+                  "net_20", "excess_5", "excess_20", "excess_60"]
+
+
+def _write(rows: list[Scored], path: Path) -> None:
+    buf = io.StringIO()
+    w = csv.writer(buf, lineterminator="\n")
+    w.writerow(SCORED_COLUMNS)
+    for x in rows:
+        e, o, s = x.result.event, x.result.outcome, x.signals
+        leg = o.legs.get(PRIMARY_H) or {}
+        w.writerow([x.year, e.filer_id, e.ticker, e.filing_date, o.entry, leg.get("exit", ""),
+                    repr(x.score), repr(x.quality), int(x.above), s.role or "",
+                    repr(s.value), _r(s.stake_change), s.cluster_count,
+                    s.repeat_buys, _r(s.drawdown), _r(s.track_record), s.track_n,
+                    _r(s.dollar_volume), _r(s.drift), _r(o.cost),
+                    _r(x.r(PRIMARY_H, net=True))]
+                   + [_r(x.r(h)) for h in HORIZONS])
+    path.write_bytes(gzip.compress(buf.getvalue().encode()))
+
+
+def _r(v) -> str:
+    return "" if v is None else repr(v)
+
+
+def write_scored(folds: list[Fold], path: Path) -> None:
+    """Every test-year event with its fold's score (full float precision)."""
+    _write([x for f in folds for x in f.scored], path)
+
+
+def write_pool(results: list[Result], signals: list[Signals], path: Path) -> None:
+    """Every shown event of every year, unscored: the training data of all folds."""
+    rows = [Scored(x, s, 0.0, 0.0, x.outcome.entry.year, False)
+            for x, s in zip(results, signals) if shown(x, s)]
+    _write(rows, path)

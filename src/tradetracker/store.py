@@ -85,14 +85,14 @@ def save_filing(conn: psycopg.Connection, f: ParsedFiling) -> tuple[int, bool]:
             """
             INSERT INTO trades (filing_id, line_no, ticker, asset_type, side, txn_code,
                                 is_10b5_1, trade_date, amount_low, amount_high,
-                                shares, price, owner, role)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                shares, price, owner, role, shares_owned_after)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             ON CONFLICT (filing_id, line_no) DO NOTHING
             """,
             (
                 filing_id, t.line_no, f.issuer_ticker, t.asset_type, t.side, t.txn_code,
                 t.is_10b5_1, t.trade_date, t.amount_low, t.amount_high,
-                t.shares, t.price, t.owner, f.role,
+                t.shares, t.price, t.owner, f.role, t.shares_owned_after,
             ),
         )
     if f.issuer_cik and f.issuer_ticker:
