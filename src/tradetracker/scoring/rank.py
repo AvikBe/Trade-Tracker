@@ -14,11 +14,12 @@ from __future__ import annotations
 
 import statistics
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 
 from ..backtest.returns import LIQUIDITY_WINDOW, TICKER_CHECK, round_trip_cost
 from ..backtest.study import MIN_LIQUID_DOLLAR_VOLUME, MIN_LIQUID_PRICE, Result
 from ..features.calendar import NYSE
+from ..fundamentals import market_cap
 from . import model as M
 from .signals import DRAWDOWN_MIN_SESSIONS, DRAWDOWN_SESSIONS, Signals
 
@@ -67,8 +68,11 @@ def _live_inputs(x: Result, prices, as_of: date) -> tuple | str:
 
 
 def rank(results: list[Result], signals: list[Signals], prices, m: M.Model, as_of: date,
-         top: int = 20) -> tuple[list[Ranked], dict]:
-    hidden = {"drift": 0, "illiquid": 0, "no_prices": 0, "ticker_mismatch": 0, "10b5-1": 0}
+         top: int = 20, shares=None, min_cap: float | None = None) -> tuple[list[Ranked], dict]:
+    """With `min_cap`, hide stocks whose market cap as of today (share counts from
+    `shares`) is below it or unknown: the spec's floor."""
+    hidden = {"drift": 0, "illiquid": 0, "no_prices": 0, "ticker_mismatch": 0, "10b5-1": 0,
+              "small_cap": 0}
     out = []
     for x, s in zip(results, signals):
         e = x.event
@@ -91,7 +95,14 @@ def rank(results: list[Result], signals: list[Signals], prices, m: M.Model, as_o
         if not close or close < MIN_LIQUID_PRICE or dv is None or dv < MIN_LIQUID_DOLLAR_VOLUME:
             hidden["illiquid"] += 1
             continue
-        s = Signals(**{**s.as_dict(), "drift": drift, "dollar_volume": dv, "drawdown": dd})
+        cap = s.market_cap
+        if min_cap is not None:
+            cap = market_cap(shares, e.issuer_cik, prices.get(e.ticker), as_of + timedelta(days=1))
+            if cap is None or cap < min_cap:
+                hidden["small_cap"] += 1
+                continue
+        s = Signals(**{**s.as_dict(), "drift": drift, "dollar_volume": dv, "drawdown": dd,
+                       "market_cap": cap})
         sc = m.score(s, days)
         out.append(Ranked(x, s, days, close, sc, m.quality(s), M.reason(s, e.ticker, days)))
     # One line per stock: its best-scored insider.

@@ -209,6 +209,17 @@ def cmd_fetch_sic(args, settings):
     print(sectors.fetch_sic(ciks, Path(args.out), settings.require_edgar()))
 
 
+def cmd_fetch_shares(args, settings):
+    from . import fundamentals
+
+    client = EdgarClient(settings.require_edgar())
+    try:
+        start = date.fromisoformat(args.start)
+        print(fundamentals.fetch(client, Path(args.out), start, date.today()))
+    finally:
+        client.close()
+
+
 def cmd_backtest(args, settings):
     from .backtest import events, prices, sectors, study
 
@@ -240,33 +251,54 @@ def _scoring_inputs(args, conn):
     evs = [e for e in evs if e.side == "buy"]
     sic = sectors.load_sic(Path(args.sic)) if args.sic else {}
     results = bt_study.run_study(evs, source, sic)
-    return source, results, signals.build(results, source)
+    shares = None
+    if getattr(args, "shares", None):
+        from .fundamentals import SharesTable
+        shares = SharesTable.load(Path(args.shares))
+    return source, results, signals.build(results, source, shares=shares), shares
 
 
 def cmd_score_backtest(args, settings):
-    from .backtest import study as bt_study
     from .scoring import study
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
     with db.connect(settings.database_url) as conn:
-        source, results, sigs = _scoring_inputs(args, conn)
-    folds = study.walk_forward(results, sigs)
+        source, results, sigs, _ = _scoring_inputs(args, conn)
+    study.add_beta_legs(results, sigs)
+    cfg = study.Config(args.name, h=args.horizon, bench=args.bench,
+                       min_cap=args.min_cap * 1e6 if args.min_cap else None,
+                       vol_target=args.vol_target)
+    variants = None
+    if args.variants:
+        variants, sums = study.variants_table(results, sigs, source)
+        (out / "variants.json").write_text(json.dumps(sums, indent=2))
+    write_score_run(out, source, results, sigs, cfg, not args.no_ablation, variants)
+    print(f"{len(results)} buy events; wrote {out / 'report.md'} and {out / 'model.json'}")
+
+
+def write_score_run(out: Path, source, results, sigs, cfg, ablation: bool = True,
+                    variants: str | None = None) -> None:
+    """Fit, test and write one setup's run: report, models, summary and CSVs."""
+    from .backtest import study as bt_study
+    from .scoring import study
+
+    out.mkdir(parents=True, exist_ok=True)
+    folds = study.walk_forward(results, sigs, cfg=cfg)
     top = [x for f in folds for x in f.scored if x.above]
-    _, half = study.decay_table(top, source)
-    final = study.fit_final(results, sigs, half_life=half)
+    _, half = study.decay_table(top, source, cfg.h, cfg.bench == "beta")
+    final = study.fit_final(results, sigs, half_life=half, cfg=cfg)
     text, folds, pf = study.render(results, sigs, source, final, source.name,
-                                  run_ablation=not args.no_ablation)
+                                  run_ablation=ablation, cfg=cfg, variants=variants)
     (out / "report.md").write_text(text)
     (out / "model.json").write_text(final.to_json())
     (out / "models").mkdir(exist_ok=True)
     for f in folds:
         (out / "models" / f"{f.year}.json").write_text(f.model.to_json())
-    (out / "summary.json").write_text(json.dumps(study.summary(folds, pf), indent=2))
-    study.write_scored(folds, out / "scored.csv.gz")
-    study.write_pool(results, sigs, out / "pool.csv.gz")
+    (out / "summary.json").write_text(json.dumps(study.summary(folds, pf, cfg), indent=2))
+    study.write_scored(folds, out / "scored.csv.gz", cfg)
+    study.write_pool(results, sigs, out / "pool.csv.gz", cfg)
     bt_study.write_events(results, out / "events.csv.gz")
-    print(f"{len(results)} buy events; wrote {out / 'report.md'} and {out / 'model.json'}")
 
 
 def cmd_rank(args, settings):
@@ -275,8 +307,9 @@ def cmd_rank(args, settings):
     m = model.Model.from_json(Path(args.model).read_text())
     as_of = date.fromisoformat(args.as_of) if args.as_of else date.today()
     with db.connect(settings.database_url) as conn:
-        source, results, sigs = _scoring_inputs(args, conn)
-    rows, hidden = rank.rank(results, sigs, source, m, as_of, top=args.top)
+        source, results, sigs, shares = _scoring_inputs(args, conn)
+    rows, hidden = rank.rank(results, sigs, source, m, as_of, top=args.top, shares=shares,
+                             min_cap=args.min_cap * 1e6 if shares and args.min_cap else None)
     print(f"Top {len(rows)} buys as of {as_of} (hidden: "
           + ", ".join(f"{k} {v}" for k, v in hidden.items()) + ")")
     for i, r in enumerate(rows, 1):
@@ -348,6 +381,11 @@ def main(argv: list[str] | None = None) -> int:
     fs.add_argument("--out", required=True, help="CSV cache, appended to")
     fs.set_defaults(fn=cmd_fetch_sic)
 
+    fsh = sub.add_parser("fetch-shares", help="shares outstanding per issuer (SEC XBRL frames)")
+    fsh.add_argument("--out", required=True, help="CSV cache, appended to")
+    fsh.add_argument("--start", default="2014-01-01")
+    fsh.set_defaults(fn=cmd_fetch_shares)
+
     bt = sub.add_parser("backtest", help="phase 3 study: returns by lag and drift")
     bt.add_argument("--prices", required=True,
                     help="'db', 'db:<source>', or a cache directory (Tiingo layout)")
@@ -361,6 +399,14 @@ def main(argv: list[str] | None = None) -> int:
     sb.add_argument("--sic", help="SIC CSV from fetch-sic (sector benchmarks)")
     sb.add_argument("--out", required=True, help="directory for report.md, model.json, scored.csv.gz")
     sb.add_argument("--no-ablation", action="store_true", help="skip the drop-one-component runs")
+    sb.add_argument("--shares", help="share counts CSV from fetch-shares (market cap)")
+    sb.add_argument("--name", default="phase 4", help="name of the setup, for the report")
+    sb.add_argument("--horizon", type=int, default=20, choices=(5, 20, 60), help="hold, sessions")
+    sb.add_argument("--bench", default="spy", choices=("spy", "sector", "iwm", "beta"),
+                    help="benchmark; beta = stock minus beta x SPY")
+    sb.add_argument("--min-cap", type=float, help="hide market caps below this, $M (needs --shares)")
+    sb.add_argument("--vol-target", type=float, help="size positions to this annual volatility")
+    sb.add_argument("--variants", action="store_true", help="also compare the five setups")
     sb.set_defaults(fn=cmd_score_backtest)
 
     rk = sub.add_parser("rank", help="top buys filed recently, scored with a fitted model")
@@ -369,6 +415,8 @@ def main(argv: list[str] | None = None) -> int:
     rk.add_argument("--sic", help="SIC CSV from fetch-sic")
     rk.add_argument("--as-of", help="date to rank as of (default today)")
     rk.add_argument("--top", type=int, default=20)
+    rk.add_argument("--shares", help="share counts CSV from fetch-shares (market-cap floor)")
+    rk.add_argument("--min-cap", type=float, default=50, help="$M floor when --shares is given")
     rk.set_defaults(fn=cmd_rank)
 
     args = p.parse_args(argv)

@@ -15,7 +15,11 @@ Checks:
 4. Track record (mean 20-day excess of earlier matured buys) from the events file.
 5. Every scored event's score and above-cutoff flag from its fold's model JSON.
 6. Each fold's bucket tables, counts and weights refit from the shown pool.
-7. Per-year and pooled top-decile means, and the portfolio's IR, from scratch.
+7. Per-year and pooled top-decile means, and the portfolio's IR, from scratch, with the
+   run's setup (summary.json "config"): horizon, benchmark (a beta-hedged run shorts
+   clip(beta, 0, 3) x SPY per position) and volatility-scaled sizing.
+8. With --shares: market cap (latest share count dated 100+ days before entry x the last
+   raw close before entry, split-adjusted), and beta and volatility, from the raw bars.
 """
 
 from __future__ import annotations
@@ -41,8 +45,9 @@ BETA_GRID = (0.0, 1.0, 2.0, 3.0, 5.0, 8.0)
 # ---------------------------------------------------------------- inputs
 
 def load(run: Path):
-    scored = pd.read_csv(run / "scored.csv.gz", parse_dates=["filing_date", "entry", "exit_20"])
-    pool = pd.read_csv(run / "pool.csv.gz", parse_dates=["filing_date", "entry", "exit_20"])
+    kw = {"parse_dates": ["filing_date", "entry", "exit"], "dtype": {"issuer_cik": str}}
+    scored = pd.read_csv(run / "scored.csv.gz", **kw)
+    pool = pd.read_csv(run / "pool.csv.gz", **kw)
     ev = pd.read_csv(run / "events.csv.gz",
                      parse_dates=["filing_date", "entry", "exit_20", "first_trade_date"])
     models = {int(p.stem): json.loads(p.read_text()) for p in (run / "models").glob("*.json")}
@@ -163,6 +168,54 @@ def check_drawdown(scored: pd.DataFrame, root: Path, sample: int, seed: int) -> 
     return report("52-week drawdown (raw bars)", bad, len(rows))
 
 
+def check_cap_and_risk(pool: pd.DataFrame, shares_csv: Path, root: Path, sample: int,
+                       seed: int) -> list[str]:
+    sh = pd.read_csv(shares_csv, dtype={"cik": str}, parse_dates=["end"])
+    sh["cik"] = sh.cik.str.lstrip("0")
+    sh = sh.drop_duplicates(["cik", "end"], keep="last").sort_values("end")
+    by_cik = {k: g for k, g in sh.groupby("cik")}
+    rows = pool if not sample or sample >= len(pool) else pool.sample(sample, random_state=seed)
+    cache: dict = {}
+    spy = bars(root, "SPY", cache)
+    bad = []
+    for r in rows.itertuples():
+        b = bars(root, r.ticker, cache)
+        want = None
+        g = by_cik.get(str(r.issuer_cik).lstrip("0")) if isinstance(r.issuer_cik, str) else None
+        if g is not None and b is not None:
+            known = g[g.end <= r.entry - pd.Timedelta(days=100)]
+            before = b[b.index < r.entry]
+            if len(known) and len(before):
+                end, n = known.end.iloc[-1], known.shares.iloc[-1]
+                then = b[b.index <= end]
+                last = before.iloc[-1]
+                t0 = then.iloc[-1] if len(then) else b.iloc[0]
+                split = (t0.close / t0.adjClose) / (last.close / last.adjClose)
+                want = n * split * last.close
+        got = None if pd.isna(r.market_cap) else r.market_cap
+        if (want is None) != (got is None) or (want is not None and abs(want / got - 1) > 1e-6):
+            bad.append(f"cap {r.ticker} {r.entry.date()}: {got} vs {want}")
+        # beta and volatility: up to 250 daily returns before entry, on days SPY traded.
+        wb = wv = None
+        if b is not None:
+            before = b[b.index < r.entry]
+            if len(before) > 60:
+                w = before.iloc[-251:]
+                ret = w.adjClose.pct_change().iloc[1:]
+                s = spy.adjClose.reindex(w.index)
+                sret = (s / s.shift(1) - 1).iloc[1:]
+                ok = sret.notna()
+                if ok.sum() >= 59:
+                    x, y = sret[ok], ret[ok]
+                    wv = y.std(ddof=1) * math.sqrt(252)
+                    wb = np.cov(x, y, ddof=1)[0, 1] / x.var(ddof=1) if x.var() > 0 else None
+        for name, got, want in (("beta", r.beta, wb), ("vol", r.vol, wv)):
+            got = None if pd.isna(got) else got
+            if (want is None) != (got is None) or (want is not None and abs(want - got) > 1e-6):
+                bad.append(f"{name} {r.ticker} {r.entry.date()}: {got} vs {want}")
+    return report("market cap, beta and volatility (raw bars, share counts)", bad, 3 * len(rows))
+
+
 # ---------------------------------------------------------------- 5-6: model
 
 def edges(x, cuts, labels, missing):
@@ -224,9 +277,9 @@ def check_refit(pool: pd.DataFrame, models: dict) -> list[str]:
     bk = [buckets(r) for r in rows]
     for year, m in sorted(models.items()):
         start = pd.Timestamp(year, 1, 1)
-        idx = [i for i, r in enumerate(rows) if not pd.isna(r["net_20"])
-               and r["exit_20"] < start]
-        y = np.array([rows[i]["net_20"] for i in idx])
+        idx = [i for i, r in enumerate(rows) if not pd.isna(r["target"])
+               and r["exit"] < start]
+        y = np.array([rows[i]["target"] for i in idx])
         s = np.sort(y)
         lo, hi = s[int(0.01 * (len(s) - 1))], s[int(0.99 * (len(s) - 1))]
         y = np.clip(y, lo, hi)
@@ -255,16 +308,18 @@ def check_refit(pool: pd.DataFrame, models: dict) -> list[str]:
 
 def check_metrics(scored: pd.DataFrame, summary: dict, root: Path) -> list[str]:
     bad = []
+    cfg = summary.get("config", {})
+    hedged, vt = cfg.get("bench") == "beta", cfg.get("vol_target")
     top = scored[scored.above == 1]
     for y, g in top.groupby("year"):
-        want = g.net_20.dropna().mean()
+        want = g.target.dropna().mean()
         got = summary["years"][str(y)]["net_mean"]
         if got is None or abs(want - got) > 1e-9:
             bad.append(f"{y} top net mean: {got} vs {want}")
-    pooled = top.net_20.dropna().mean()
+    pooled = top.target.dropna().mean()
     if abs(pooled - summary["pooled"]["net_mean"]) > 1e-9:
         bad.append(f"pooled: {summary['pooled']['net_mean']} vs {pooled}")
-    hit = (top.excess_20.dropna() > 0).mean()
+    hit = (top.gross.dropna() > 0).mean()
     if abs(hit - summary["pooled"]["hit"]) > 1e-9:
         bad.append(f"hit: {summary['pooled']['hit']} vs {hit}")
 
@@ -275,8 +330,8 @@ def check_metrics(scored: pd.DataFrame, summary: dict, root: Path) -> list[str]:
     spy_intraday = spy["adjClose"] / spy["adjOpen"] - 1
     cand = top.sort_values(["entry", "score"], ascending=[True, False])
     # Exit days are the phase 3 legs' (cross-checked against XNYS by crosscheck_backtest).
-    exits = {(r.ticker, r.entry): r.exit_20 for r in cand.itertuples()
-             if not pd.isna(r.exit_20) and bars(root, r.ticker, cache) is not None}
+    exits = {(r.ticker, r.entry): r.exit for r in cand.itertuples()
+             if not pd.isna(r.exit) and bars(root, r.ticker, cache) is not None}
     days = spy.index[(spy.index >= cand.entry.min())]
     held, excess, trades = [], [], 0
     by_day = {d: g for d, g in cand.groupby("entry")}
@@ -286,11 +341,14 @@ def check_metrics(scored: pd.DataFrame, summary: dict, root: Path) -> list[str]:
         for r in by_day.get(d, pd.DataFrame()).itertuples():
             if len(held) >= 20 or r.ticker in tick or (r.ticker, r.entry) not in exits:
                 continue
-            held.append((r.ticker, r.entry, exits[(r.ticker, r.entry)], r.cost))
+            b = 1.0 if pd.isna(r.beta) else min(max(r.beta, 0.0), 3.0)
+            wt = 1.0 if not vt or pd.isna(r.vol) or not r.vol else min(2.0, vt / r.vol)
+            held.append((r.ticker, r.entry, exits[(r.ticker, r.entry)], r.cost,
+                         b if hedged else 1.0, wt))
             tick.add(r.ticker)
             trades += 1
         tot = 0.0
-        for t, entry, ex, cost in held:
+        for t, entry, ex, cost, beta, wt in held:
             b = bars(root, t, cache)
             first = d == entry
             if d in b.index:
@@ -301,14 +359,14 @@ def check_metrics(scored: pd.DataFrame, summary: dict, root: Path) -> list[str]:
                     k = b.index.get_loc(d)
                     rr = b["adjClose"].iloc[k] / b["adjClose"].iloc[k - 1] - 1 if k > 0 else None
                     s = spy_ret.get(d, 0.0)
-                e = 0.0 if rr is None or pd.isna(rr) else rr - (0.0 if pd.isna(s) else s)
+                e = 0.0 if rr is None or pd.isna(rr) else rr - beta * (0.0 if pd.isna(s) else s)
             else:
                 e = 0.0
             if first:
                 e -= cost / 2
             if d == ex:
                 e -= cost / 2
-            tot += e
+            tot += e * wt
         excess.append((d, tot / 20, len(held)))
         held = [h for h in held if h[2] > d]
     while excess and excess[-1][2] == 0:
@@ -323,7 +381,7 @@ def check_metrics(scored: pd.DataFrame, summary: dict, root: Path) -> list[str]:
 
 
 def run_checks(run: Path, root: Path, db: str | None, sample: int = 0,
-               seed: int = 1) -> list[str]:
+               seed: int = 1, shares: Path | None = None) -> list[str]:
     """Signals are checked on the whole shown pool (every year); the model on test years."""
     scored, pool, ev, models, summary = load(run)
     bad = []
@@ -331,6 +389,8 @@ def run_checks(run: Path, root: Path, db: str | None, sample: int = 0,
         bad += check_stake(pool, db)
     bad += check_repeat_and_track(pool, ev)
     bad += check_drawdown(pool, root, sample, seed)
+    if shares:
+        bad += check_cap_and_risk(pool, shares, root, sample, seed)
     if models:
         bad += check_scores(scored, models)
         bad += check_refit(pool, models)
@@ -345,8 +405,10 @@ def main() -> int:
     p.add_argument("--db", default=os.environ.get("DATABASE_URL"))
     p.add_argument("--sample", type=int, default=5000, help="drawdown sample; 0 checks all")
     p.add_argument("--seed", type=int, default=1)
+    p.add_argument("--shares", help="share counts CSV, to check market caps")
     a = p.parse_args()
-    bad = run_checks(Path(a.run), Path(a.prices), a.db, a.sample, a.seed)
+    bad = run_checks(Path(a.run), Path(a.prices), a.db, a.sample, a.seed,
+                     Path(a.shares) if a.shares else None)
     print(f"total mismatches: {len(bad)}")
     return 1 if bad else 0
 
