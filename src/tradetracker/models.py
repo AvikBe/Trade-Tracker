@@ -18,6 +18,7 @@ class ParsedTrade:
     asset_type: str = "stock"
     amount_low: Decimal | None = None
     amount_high: Decimal | None = None
+    shares_owned_after: Decimal | None = None
 
 
 @dataclass

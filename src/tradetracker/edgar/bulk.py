@@ -148,6 +148,7 @@ def parse_quarter(path: Path | str) -> Iterator[ParsedFiling]:
                     trade_date=trade_date,
                     shares=_dec(r.get("TRANS_SHARES")),
                     price=_dec(r.get("TRANS_PRICEPERSHARE")),
+                    shares_owned_after=_dec(r.get("SHRS_OWND_FOLWNG_TRANS")),
                     owner=owner_from_nature(
                         r.get("DIRECT_INDIRECT_OWNERSHIP"), r.get("NATURE_OF_OWNERSHIP")
                     ),

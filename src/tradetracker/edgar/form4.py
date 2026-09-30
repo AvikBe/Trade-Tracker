@@ -112,6 +112,8 @@ def parse_form4(
                 trade_date=trade_date,
                 shares=_decimal(_value(txn, "transactionAmounts/transactionShares")),
                 price=_decimal(_value(txn, "transactionAmounts/transactionPricePerShare")),
+                shares_owned_after=_decimal(_value(
+                    txn, "postTransactionAmounts/sharesOwnedFollowingTransaction")),
                 owner=owner_from_nature(
                     _value(txn, "ownershipNature/directOrIndirectOwnership"),
                     _value(txn, "ownershipNature/natureOfOwnership"),

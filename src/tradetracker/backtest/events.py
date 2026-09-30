@@ -34,7 +34,8 @@ EVENTS_SQL = """
     SELECT t.trade_id, f.filing_id, f.filer_id, f.issuer_cik, t.ticker, t.side, t.trade_date,
            t.shares, t.price, t.role, t.is_10b5_1, coalesce(f.document_type, ''),
            f.accepted_at, x.filing_date, x.lag_days, x.lag_ratio, x.role_weight,
-           x.cluster_count, x.trade_value, x.duplicate_of_trade_id, x.flags
+           x.cluster_count, x.trade_value, x.duplicate_of_trade_id, x.flags,
+           t.shares_owned_after, t.owner
     FROM trades t
     JOIN filings f USING (filing_id)
     LEFT JOIN latest_trade_features x USING (trade_id)
@@ -60,6 +61,11 @@ class Event:
     role_weight: float | None = None
     cluster_count: int = 0
     is_10b5_1: bool = False
+    # Per account (self, spouse, trust...): shares held before the event's first buy. Lines
+    # in a filing are not always in trade order, so this is the smallest "owned after
+    # minus shares" over the account's lines (holdings only grow across buys).
+    held_before: dict[str, float] = field(default_factory=dict)
+    holdings_missing: bool = False   # some line didn't report shares owned after
     n_lines: int = 0
     filing_ids: set[int] = field(default_factory=set)
     trade_ids: list[int] = field(default_factory=list)
@@ -67,6 +73,13 @@ class Event:
     @property
     def avg_price(self) -> float | None:
         return self.value / self.shares if self.shares > 0 and self.value > 0 else None
+
+    @property
+    def shares_held_before(self) -> float | None:
+        """Shares held before the first buy line, summed over the accounts that bought."""
+        if self.holdings_missing or not self.held_before:
+            return None
+        return sum(self.held_before.values())
 
     @property
     def entry_date(self) -> date:
@@ -107,7 +120,7 @@ def load_events(conn: psycopg.Connection) -> tuple[list[Event], Exclusions]:
         for row in cur:
             (trade_id, filing_id, filer_id, cik, ticker, side, trade_date, shares, price, role,
              is_10b5_1, doc_type, accepted_at, filing_date, lag_days, lag_ratio, role_weight,
-             cluster_count, value, duplicate_of, flags) = row
+             cluster_count, value, duplicate_of, flags, owned_after, owner) = row
             ex.add("lines")
             if filing_date is None:
                 ex.add("no_features")
@@ -147,6 +160,12 @@ def load_events(conn: psycopg.Connection) -> tuple[list[Event], Exclusions]:
                 e.role_weight, e.role = float(role_weight), role
             e.cluster_count = max(e.cluster_count, cluster_count or 0)
             e.is_10b5_1 = e.is_10b5_1 or bool(is_10b5_1)
+            if owned_after is None or shares is None:
+                e.holdings_missing = True
+            else:
+                acct = owner or "self"
+                before = float(owned_after) - float(shares)
+                e.held_before[acct] = min(e.held_before.get(acct, before), before)
             e.n_lines += 1
             e.filing_ids.add(filing_id)
             e.trade_ids.append(trade_id)

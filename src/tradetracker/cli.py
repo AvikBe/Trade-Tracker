@@ -1,6 +1,7 @@
 """Command line entry point: `tt <command>`."""
 
 import argparse
+import json
 import logging
 import os
 import sys
@@ -229,6 +230,61 @@ def cmd_backtest(args, settings):
     print(f"{len(results)} events, {ok} with returns; wrote {out / 'report.md'}")
 
 
+def _scoring_inputs(args, conn):
+    from .backtest import events, prices, sectors
+    from .backtest import study as bt_study
+    from .scoring import signals
+
+    source = prices.open_source(args.prices, conn)
+    evs, _ = events.load_events(conn)
+    evs = [e for e in evs if e.side == "buy"]
+    sic = sectors.load_sic(Path(args.sic)) if args.sic else {}
+    results = bt_study.run_study(evs, source, sic)
+    return source, results, signals.build(results, source)
+
+
+def cmd_score_backtest(args, settings):
+    from .backtest import study as bt_study
+    from .scoring import study
+
+    out = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    with db.connect(settings.database_url) as conn:
+        source, results, sigs = _scoring_inputs(args, conn)
+    folds = study.walk_forward(results, sigs)
+    top = [x for f in folds for x in f.scored if x.above]
+    _, half = study.decay_table(top, source)
+    final = study.fit_final(results, sigs, half_life=half)
+    text, folds, pf = study.render(results, sigs, source, final, source.name,
+                                  run_ablation=not args.no_ablation)
+    (out / "report.md").write_text(text)
+    (out / "model.json").write_text(final.to_json())
+    (out / "models").mkdir(exist_ok=True)
+    for f in folds:
+        (out / "models" / f"{f.year}.json").write_text(f.model.to_json())
+    (out / "summary.json").write_text(json.dumps(study.summary(folds, pf), indent=2))
+    study.write_scored(folds, out / "scored.csv.gz")
+    study.write_pool(results, sigs, out / "pool.csv.gz")
+    bt_study.write_events(results, out / "events.csv.gz")
+    print(f"{len(results)} buy events; wrote {out / 'report.md'} and {out / 'model.json'}")
+
+
+def cmd_rank(args, settings):
+    from .scoring import model, rank
+
+    m = model.Model.from_json(Path(args.model).read_text())
+    as_of = date.fromisoformat(args.as_of) if args.as_of else date.today()
+    with db.connect(settings.database_url) as conn:
+        source, results, sigs = _scoring_inputs(args, conn)
+    rows, hidden = rank.rank(results, sigs, source, m, as_of, top=args.top)
+    print(f"Top {len(rows)} buys as of {as_of} (hidden: "
+          + ", ".join(f"{k} {v}" for k, v in hidden.items()) + ")")
+    for i, r in enumerate(rows, 1):
+        e = r.result.event
+        print(f"{i:2d}. {e.ticker:6s} score {r.score:.3f} (Q {r.quality:.2f}), filed "
+              f"{e.filing_date}: {r.reason}; round trip {rank.cost_note(r)}")
+
+
 def cmd_report(args, settings):
     with db.connect(settings.database_url) as conn:
         print(report.render(conn))
@@ -299,6 +355,21 @@ def main(argv: list[str] | None = None) -> int:
     bt.add_argument("--compare", help="a second price source to check the first against")
     bt.add_argument("--out", required=True, help="directory for report.md and events.csv.gz")
     bt.set_defaults(fn=cmd_backtest)
+
+    sb = sub.add_parser("score-backtest", help="phase 4: fit the score and test it walk-forward")
+    sb.add_argument("--prices", required=True, help="as for backtest")
+    sb.add_argument("--sic", help="SIC CSV from fetch-sic (sector benchmarks)")
+    sb.add_argument("--out", required=True, help="directory for report.md, model.json, scored.csv.gz")
+    sb.add_argument("--no-ablation", action="store_true", help="skip the drop-one-component runs")
+    sb.set_defaults(fn=cmd_score_backtest)
+
+    rk = sub.add_parser("rank", help="top buys filed recently, scored with a fitted model")
+    rk.add_argument("--model", required=True, help="model.json from score-backtest")
+    rk.add_argument("--prices", required=True, help="as for backtest")
+    rk.add_argument("--sic", help="SIC CSV from fetch-sic")
+    rk.add_argument("--as-of", help="date to rank as of (default today)")
+    rk.add_argument("--top", type=int, default=20)
+    rk.set_defaults(fn=cmd_rank)
 
     args = p.parse_args(argv)
     try:
