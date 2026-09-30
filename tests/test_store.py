@@ -190,3 +190,37 @@ def test_amendment_that_corrects_the_period_links_by_original_filing_date(conn):
     store.save_filing(conn, original)
     store.save_filing(conn, amendment)
     assert store.link_amendments(conn) == 1
+
+
+PLCE_ZIP = Path(__file__).parent / "fixtures" / "real" / "2024q1_plce_joint_form345.zip"
+
+
+def test_joint_amendments_that_add_an_owner_link_to_their_originals(conn):
+    # Children's Place, Feb 2024: Mithaq's three 4/As list Mithaq Capital, which the
+    # originals did not, so the primary owner differs between amendment and original.
+    for f in parse_quarter(PLCE_ZIP):
+        store.save_filing(conn, f)
+    store.link_amendments(conn)
+    links = dict(conn.execute(
+        "SELECT a.source_filing_id, o.source_filing_id FROM filings a "
+        "LEFT JOIN filings o ON o.filing_id = a.amends_filing_id WHERE a.document_type = '4/A'"
+    ).fetchall())
+    assert links == {
+        "0001104659-24-025044": "0001104659-24-022552",
+        "0001104659-24-025045": "0001104659-24-024181",
+        "0001104659-24-025046": "0001104659-24-024492",
+    }
+    assert conn.execute(
+        "SELECT count(*) FROM filing_owners fo JOIN filings f USING (filing_id) "
+        "WHERE f.source_filing_id = '0001104659-24-025044'"
+    ).fetchone()[0] == 6
+
+
+def test_amendment_does_not_link_to_another_owners_filing(conn):
+    # Same issuer and period, but no owner in common: not an original.
+    filings = {f.source_filing_id: f for f in parse_quarter(PLCE_ZIP)}
+    original = filings["0001104659-24-022552"]
+    original.owner_ciks, original.filer_key = ["999"], "999"
+    store.save_filing(conn, original)
+    store.save_filing(conn, filings["0001104659-24-025044"])
+    assert store.link_amendments(conn) == 0

@@ -75,6 +75,11 @@ def save_filing(conn: psycopg.Connection, f: ParsedFiling) -> tuple[int, bool]:
         return existing[0], False
 
     filing_id = row[0]
+    conn.execute(
+        "INSERT INTO filing_owners (filing_id, owner_cik) "
+        "SELECT %s, unnest(%s::text[]) ON CONFLICT DO NOTHING",
+        (filing_id, [c for c in f.owner_ciks or [f.filer_key] if c]),
+    )
     for t in f.trades:
         conn.execute(
             """
@@ -102,24 +107,35 @@ def link_amendments(conn: psycopg.Connection) -> int:
     can come before its original, and quarters can be loaded in any order.
     Amendments of filings older than the loaded history stay unlinked.
     """
+    # A joint 4/A can list different owners than its original, so candidates are
+    # the issuer's filings that share any owner with the amendment. filing_owners
+    # always holds the primary owner too.
+    candidates = """
+        SELECT o.* FROM filing_owners ao
+        JOIN filing_owners oo ON oo.owner_cik = ao.owner_cik AND oo.filing_id <> ao.filing_id
+        JOIN filings o ON o.filing_id = oo.filing_id
+        WHERE ao.filing_id = a.filing_id
+          AND o.issuer_cik IS NOT DISTINCT FROM a.issuer_cik
+          AND o.document_type NOT LIKE '%/A'
+    """
     cur = conn.execute(
-        """
+        f"""
         WITH originals AS (
             SELECT a.filing_id, coalesce((
-                SELECT o.filing_id FROM filings o
-                WHERE o.filer_id = a.filer_id
-                  AND o.issuer_cik IS NOT DISTINCT FROM a.issuer_cik
-                  AND o.period_of_report IS NOT DISTINCT FROM a.period_of_report
-                  AND o.document_type NOT LIKE '%/A' AND o.filed_at <= a.filed_at
-                ORDER BY o.filed_at, o.filing_id LIMIT 1
+                SELECT o.filing_id FROM ({candidates}) o
+                WHERE o.period_of_report IS NOT DISTINCT FROM a.period_of_report
+                  AND o.filed_at <= a.filed_at
+                -- Several joint owners' filings can share a period; the stated
+                -- original filing date breaks the tie.
+                ORDER BY (o.filed_at AT TIME ZONE 'America/New_York')::date
+                             IS NOT DISTINCT FROM a.original_filed_on DESC,
+                         o.filed_at, o.filing_id
+                LIMIT 1
             ), (
                 -- The amendment corrected the period, so match on the original's
                 -- filing date, which the 4/A states.
-                SELECT o.filing_id FROM filings o
-                WHERE o.filer_id = a.filer_id
-                  AND o.issuer_cik IS NOT DISTINCT FROM a.issuer_cik
-                  AND (o.filed_at AT TIME ZONE 'America/New_York')::date = a.original_filed_on
-                  AND o.document_type NOT LIKE '%/A'
+                SELECT o.filing_id FROM ({candidates}) o
+                WHERE (o.filed_at AT TIME ZONE 'America/New_York')::date = a.original_filed_on
                 ORDER BY o.filing_id LIMIT 1
             )) AS original_id
             FROM filings a
