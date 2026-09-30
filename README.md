@@ -98,8 +98,10 @@ filing date is before (z-score, size) or on (clusters) this trade's filing date.
 | `size_score` | dollar size percentile vs the filer's own earlier same-side trades (5+), else vs all same-side trades of the past year (`size_basis`) |
 | `cluster_count` | distinct insiders trading the same ticker and side within 14 days, known by this filing date |
 
-Amendment lines that repeat or correct an original line keep the original filing date,
-point at it through `duplicate_of_trade_id`, and never count twice in any history.
+Amendment lines that repeat or correct an original line, and exact repeats of a trade the
+same filer already disclosed in another Form 4 (joint filers filing separately), keep the
+first filing date, point at the first line through `duplicate_of_trade_id`, and never
+count twice in any history.
 `flags` records why a value is missing (`no_prices`, `no_trade_price`, `trade_after_filing`, ...)
 and marks `10b5_1` and amendment trades.
 
@@ -131,7 +133,10 @@ cross-checking 260 filings against their XML:
   filing. Amendments of filings older than the loaded history stay unlinked, and
   `tt report` shows how many.
 - Joint filings list their owners in a different order in the two sources, so both
-  parsers pick the most senior owner, then the lowest CIK.
+  parsers pick the most senior owner, then the lowest CIK. Every joint owner is kept
+  in `filing_owners`, because a joint 4/A can add or drop owners (Mithaq Capital's
+  Children's Place filings, Feb 2024), and amendments match originals on any
+  shared owner.
 - Row order in the data sets is not document order, and the ownership nature
   (spouse, trust) is sometimes on the wrong row. Side, date, shares and price agree.
 - Filers type tickers like `NONE`, `(SIRI)`, `NYSE: SCS` or `Z AND ZG`; they are

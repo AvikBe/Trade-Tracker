@@ -63,6 +63,7 @@ class TradeInput:
     amount_high: Decimal | None = None
     role: str | None = None
     is_10b5_1: bool = False
+    line_no: int = 0  # position within the filing; breaks ties so results never depend on ids
 
 
 @dataclass
@@ -130,28 +131,23 @@ def percentile(sorted_values: list[float], x: float) -> float:
     return (lo + 0.5 * (hi - lo)) / len(sorted_values)
 
 
-class _LogHistogram:
-    """Counts of positive values in log-spaced bins, with add, remove and rank.
+class _RankTree:
+    """Exact mid-rank percentiles over a changing multiset of known values.
 
-    Ranks against a rolling year of trades would be O(n) per insert with a sorted
-    list; a Fenwick tree over 0.005-decade bins keeps it O(log n) with ranks exact
-    to about 1% in dollar terms.
+    A rolling year of trades makes a sorted list O(n) per insert. Instead every value
+    that can ever be added is known up front, so a Fenwick tree over their sorted
+    positions gives add, remove and rank in O(log n).
     """
 
-    STEP = 0.005
-    LO, HI = 0.0, 12.0  # $1 to $1T
-
-    def __init__(self):
-        self.size = int((self.HI - self.LO) / self.STEP) + 1
+    def __init__(self, universe: Iterable[float]):
+        self.values = sorted(set(universe))
+        self.size = len(self.values)
         self.tree = [0] * (self.size + 1)
         self.counts = [0] * self.size
         self.total = 0
 
-    def _bin(self, v: float) -> int:
-        b = int((math.log10(max(v, 1.0)) - self.LO) / self.STEP)
-        return min(max(b, 0), self.size - 1)
-
-    def _update(self, b: int, delta: int) -> None:
+    def _update(self, v: float, delta: int) -> None:
+        b = bisect.bisect_left(self.values, v)
         self.counts[b] += delta
         self.total += delta
         i = b + 1
@@ -159,58 +155,76 @@ class _LogHistogram:
             self.tree[i] += delta
             i += i & -i
 
-    def _below(self, b: int) -> int:
-        i, s = b, 0
-        while i > 0:
-            s += self.tree[i]
-            i -= i & -i
-        return s
-
     def add(self, v: float) -> None:
-        self._update(self._bin(v), 1)
+        self._update(v, 1)
 
     def remove(self, v: float) -> None:
-        self._update(self._bin(v), -1)
+        self._update(v, -1)
 
     def rank(self, v: float) -> float:
-        b = self._bin(v)
-        return (self._below(b) + 0.5 * self.counts[b]) / self.total
+        """Share of values below v, counting values equal to v as half."""
+        b = bisect.bisect_left(self.values, v)
+        i, below = b, 0
+        while i > 0:
+            below += self.tree[i]
+            i -= i & -i
+        equal = self.counts[b] if b < self.size and self.values[b] == v else 0
+        return (below + 0.5 * equal) / self.total
 
 
-def _duplicates(trades: list[TradeInput]) -> dict[int, tuple[TradeInput, bool]]:
-    """Map amendment trades that restate a trade of the original filing to that trade.
+def _duplicates(trades: list[TradeInput]) -> dict[int, tuple[TradeInput, str]]:
+    """Map trades that restate an earlier-disclosed trade to that trade.
 
-    An exact repeat (same side, date, shares and price) matches first. Otherwise a line
-    with the same side and date is taken to correct the size or price, and then a line
-    with the same side, shares and price to correct the date. Returns {trade_id:
-    (original, exact)}; each original line is matched at most once.
+    Returns {trade_id: (original, kind)}, each original line matched at most once:
+
+    - Amendment lines, against the filing they amend: an exact repeat (same side,
+      date, shares and price) is "amendment_duplicate"; a line with the same side and
+      date ("size or price fixed"), or else the same side, shares and price ("date
+      fixed"), is "amendment_correction".
+    - Lines of an ordinary filing that repeat, exactly, a line the same filer already
+      disclosed for the same ticker in an earlier filing are "duplicate_filing". Joint
+      filers sometimes file one Form 4 each for the same shares, and after milestone 1
+      picks one owner per filing both land on the same filer.
     """
     by_filing: dict[int, list[TradeInput]] = defaultdict(list)
-    for t in trades:
+    for t in sorted(trades, key=lambda t: (t.line_no, t.trade_id)):
         by_filing[t.filing_id].append(t)
-    out: dict[int, tuple[TradeInput, bool]] = {}
-    amendments: dict[int, list[TradeInput]] = defaultdict(list)
-    for t in trades:
-        if t.amends_filing_id is not None:
-            amendments[t.filing_id].append(t)
+    out: dict[int, tuple[TradeInput, str]] = {}
+    amendments = {fid: lines for fid, lines in by_filing.items() if lines[0].amends_filing_id}
+    rules = [
+        ("amendment_duplicate", lambda o, t: (o.side, o.trade_date, o.shares, o.price)
+         == (t.side, t.trade_date, t.shares, t.price)),
+        ("amendment_correction", lambda o, t: (o.side, o.trade_date) == (t.side, t.trade_date)),
+        ("amendment_correction", lambda o, t: (o.side, o.shares, o.price)
+         == (t.side, t.shares, t.price)),
+    ]
     for lines in amendments.values():
         originals = by_filing.get(lines[0].amends_filing_id, [])
         used: set[int] = set()
-        rules = [
-            (True, lambda o, t: (o.side, o.trade_date, o.shares, o.price)
-             == (t.side, t.trade_date, t.shares, t.price)),
-            (False, lambda o, t: (o.side, o.trade_date) == (t.side, t.trade_date)),
-            (False, lambda o, t: (o.side, o.shares, o.price) == (t.side, t.shares, t.price)),
-        ]
-        for exact, same in rules:
+        for kind, same in rules:
             for t in lines:
                 if t.trade_id in out:
                     continue
                 for o in originals:
                     if o.trade_id not in used and same(o, t):
-                        out[t.trade_id] = (o, exact)
+                        out[t.trade_id] = (o, kind)
                         used.add(o.trade_id)
                         break
+
+    # Exact repeats across ordinary filings of the same filer and ticker.
+    groups: dict[tuple, dict[int, list[TradeInput]]] = defaultdict(lambda: defaultdict(list))
+    for t in (t for lines in by_filing.values() for t in lines):
+        if t.document_type.endswith("/A") or t.shares is None or t.price is None:
+            continue
+        key = (t.filer_id, t.ticker, t.side, t.trade_date, t.shares, t.price)
+        groups[key][t.filing_id].append(t)
+    for filings in groups.values():
+        if len(filings) < 2:
+            continue
+        ordered = sorted(filings.values(), key=lambda ls: (filing_date(ls[0].filed_at), ls[0].filing_id))
+        for later in ordered[1:]:
+            for t, o in zip(later, ordered[0]):
+                out[t.trade_id] = (o, "duplicate_filing")
     return out
 
 
@@ -230,7 +244,13 @@ def compute(
     order = sorted(trades, key=lambda t: (filed[t.trade_id], t.filing_id, t.trade_id))
     filer_lags: dict[int, list[int]] = defaultdict(list)          # one lag per prior filing
     filer_values: dict[tuple[int, str], list[float]] = defaultdict(list)  # kept sorted
-    market = {"buy": _LogHistogram(), "sell": _LogHistogram()}
+    values = {t.trade_id: trade_value(t) for t in trades}
+    market = {
+        side: _RankTree(
+            v for t in trades if t.side == side and (v := values[t.trade_id]) is not None
+        )
+        for side in ("buy", "sell")
+    }
     market_window: deque[tuple[date, str, float]] = deque()
     pending: list[TradeInput] = []  # today's trades, added to history once the day is done
 
@@ -264,9 +284,9 @@ def compute(
         pending.append(t)
 
         if t.trade_id in dups:
-            original, exact = dups[t.trade_id]
+            original, kind = dups[t.trade_id]
             r.duplicate_of_trade_id = original.trade_id
-            r.flags.append("amendment_duplicate" if exact else "amendment_correction")
+            r.flags.append(kind)
         elif t.amends_filing_id is not None or t.document_type.endswith("/A"):
             r.flags.append("amendment")
         if t.is_10b5_1:
@@ -289,7 +309,7 @@ def compute(
             std = math.sqrt(sum((x - mean) ** 2 for x in history) / len(history))
             r.filer_lag_zscore = (r.lag_days - mean) / max(std, ZSCORE_MIN_STD)
 
-        r.trade_value = trade_value(t)
+        r.trade_value = values[t.trade_id]
         if r.trade_value is None:
             r.flags.append("no_value")
         else:

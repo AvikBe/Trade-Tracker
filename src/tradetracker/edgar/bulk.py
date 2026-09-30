@@ -169,6 +169,7 @@ def parse_quarter(path: Path | str) -> Iterator[ParsedFiling]:
             issuer_ticker=clean_ticker(sub.get("ISSUERTRADINGSYMBOL")),
             period_of_report=_sec_date(sub.get("PERIOD_OF_REPORT")),
             original_filed_on=_sec_date(sub.get("DATE_OF_ORIG_SUB")),
+            owner_ciks=sorted({c[1].lstrip("0") for c in candidates[acc] if c[1].strip("0")}),
             filed_at=eastern_midnight(filed),
             source_url=_filing_url(cik, acc),
             trades=trades,
