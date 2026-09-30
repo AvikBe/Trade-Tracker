@@ -253,6 +253,7 @@ def reason(s: Signals, ticker: str, days_since_filing: int = 0) -> str:
     if s.cluster_count >= 2:
         parts.append(f"{s.cluster_count} insiders buying within 14 days")
     parts.append("first buy in 2 years" if s.repeat_buys == 0
+                 else "1 earlier buy in 2 years" if s.repeat_buys == 1
                  else f"{s.repeat_buys} earlier buys in 2 years")
     if s.drawdown is not None:
         parts.append(f"stock {abs(100 * s.drawdown):.0f}% below its 52-week high"

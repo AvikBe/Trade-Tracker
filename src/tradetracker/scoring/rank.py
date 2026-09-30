@@ -16,7 +16,7 @@ import statistics
 from dataclasses import dataclass
 from datetime import date
 
-from ..backtest.returns import LIQUIDITY_WINDOW, round_trip_cost
+from ..backtest.returns import LIQUIDITY_WINDOW, TICKER_CHECK, round_trip_cost
 from ..backtest.study import MIN_LIQUID_DOLLAR_VOLUME, MIN_LIQUID_PRICE, Result
 from ..features.calendar import NYSE
 from . import model as M
@@ -37,16 +37,23 @@ class Ranked:
     reason: str
 
 
-def _live_inputs(x: Result, prices, as_of: date) -> tuple | None:
-    """(drift, dollar volume, drawdown, last raw close) as of the close of `as_of`."""
+def _live_inputs(x: Result, prices, as_of: date) -> tuple | str:
+    """(drift, dollar volume, drawdown, last raw close) as of the close of `as_of`,
+    or the reason the event can't be priced."""
     e = x.event
     bars = prices.get(e.ticker)
     if bars is None:
-        return None
+        return "no_prices"
     i = bars.index_on_or_before(as_of)
     t0 = bars.index_on_or_before(e.first_trade_date)
+    t1 = bars.index_on_or_before(e.last_trade_date)
     if i is None or t0 is None or i < t0:
-        return None
+        return "no_prices"
+    # The backtest's ticker check: the Form 4 price must be within 0.5x to 2x of the
+    # vendor's raw close on the trade date, or the symbol may now be another company.
+    raw = bars.bars[t1].close
+    if e.avg_price and raw and not TICKER_CHECK[0] <= e.avg_price / raw <= TICKER_CHECK[1]:
+        return "ticker_mismatch"
     last = bars.bars[i]
     drift = last.adj_close / bars.bars[t0].adj_close - 1
     window = [b for b in bars.bars[max(0, i - LIQUIDITY_WINDOW + 1): i + 1]
@@ -61,7 +68,7 @@ def _live_inputs(x: Result, prices, as_of: date) -> tuple | None:
 
 def rank(results: list[Result], signals: list[Signals], prices, m: M.Model, as_of: date,
          top: int = 20) -> tuple[list[Ranked], dict]:
-    hidden = {"drift": 0, "illiquid": 0, "no_prices": 0, "10b5-1": 0}
+    hidden = {"drift": 0, "illiquid": 0, "no_prices": 0, "ticker_mismatch": 0, "10b5-1": 0}
     out = []
     for x, s in zip(results, signals):
         e = x.event
@@ -74,8 +81,8 @@ def rank(results: list[Result], signals: list[Signals], prices, m: M.Model, as_o
             hidden["10b5-1"] += 1
             continue
         live = _live_inputs(x, prices, as_of)
-        if live is None:
-            hidden["no_prices"] += 1
+        if isinstance(live, str):
+            hidden[live] += 1
             continue
         drift, dv, dd, close = live
         if drift > MAX_DRIFT:

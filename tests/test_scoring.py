@@ -50,7 +50,7 @@ def ev(**kw) -> Event:
     base = dict(filer_id=1, issuer_cik="1", ticker="X", side="buy",
                 filing_date=date(2024, 1, 10), accepted_at=None,
                 first_trade_date=date(2024, 1, 8), last_trade_date=date(2024, 1, 8),
-                lag_days=2, lag_ratio=1.0, value=100_000.0, shares=1000.0, role="CEO",
+                lag_days=2, lag_ratio=1.0, value=10_000.0, shares=1000.0, role="CEO",
                 cluster_count=1)
     base.update(kw)
     return Event(**base)
@@ -302,9 +302,9 @@ def test_reason_line():
         "the trade, filed 2 trading days ago")
     s = sig(role=None, value=900, stake_change=S.NEW_STAKE, repeat_buys=2, drawdown=0.0,
             drift=None)
-    assert M.reason(s, "A") == ("Insider bought $900 of A, a new stake, first buy in 2 years"
-                                .replace("first buy in 2 years", "2 earlier buys in 2 years")
-                                + ", stock at its 52-week high")
+    assert M.reason(s, "A") == ("Insider bought $900 of A, a new stake, 2 earlier buys in 2 "
+                                "years, stock at its 52-week high")
+    assert "1 earlier buy in 2 years," in M.reason(sig(repeat_buys=1), "A")
 
 
 # ---------------------------------------------------------------- study
@@ -476,7 +476,7 @@ def test_rank_hides_run_ups_stale_and_illiquid_filings_and_applies_decay():
     rows = [
         res(ev(ticker="A", first_trade_date=trade, filing_date=fresh), r20=None),
         res(ev(ticker="B", first_trade_date=trade, filing_date=fresh), r20=None),
-        res(ev(ticker="C", first_trade_date=trade, filing_date=fresh), r20=None),
+        res(ev(ticker="C", first_trade_date=trade, filing_date=fresh, value=1500.0), r20=None),
         res(ev(ticker="D", first_trade_date=trade, filing_date=fresh), r20=None),
         res(ev(ticker="E", first_trade_date=date(2023, 12, 1), filing_date=date(2023, 12, 5)),
             r20=None),                                                  # > 30 sessions ago
@@ -493,9 +493,31 @@ def test_rank_hides_run_ups_stale_and_illiquid_filings_and_applies_decay():
     out, hidden = R.rank(rows, sigs, src, m, as_of)
     assert [r.result.event.ticker for r in out] == ["A"]
     assert out[0].result.event.role == "CEO"
-    assert hidden == {"drift": 1, "illiquid": 2, "no_prices": 0, "10b5-1": 1}
+    assert hidden == {"drift": 1, "illiquid": 2, "no_prices": 0, "ticker_mismatch": 0,
+                      "10b5-1": 1}
     d = NYSE.business_days_between(fresh, as_of)
     assert out[0].days_since_filing == d
     assert out[0].score == pytest.approx(1.0 * M.Model.decay(m, d))
     assert out[0].signals.drift == 0.0 and out[0].signals.drawdown == 0.0
     assert "filed" in out[0].reason
+
+
+def test_rank_drops_a_symbol_that_now_belongs_to_another_company():
+    as_of = date(2024, 3, 1)
+    start = date(2023, 1, 3)
+    n = NYSE.business_days_between(start, as_of) + 1
+    src = Source({"A": bars_from(start, [10.0] * n), "B": bars_from(start, [10.0] * n)})
+    trade = date(2024, 2, 20)
+    fresh = NYSE.add(trade, 2)
+    # Form 4 prices of $4.99 and $20.01 against a $10 close: outside 0.5x to 2x.
+    low = ev(ticker="A", first_trade_date=trade, last_trade_date=trade, filing_date=fresh,
+             value=4990.0, shares=1000.0)
+    high = ev(ticker="B", first_trade_date=trade, last_trade_date=trade, filing_date=fresh,
+              value=20010.0, shares=1000.0)
+    ok = ev(ticker="B", filer_id=2, first_trade_date=trade, last_trade_date=trade,
+            filing_date=fresh, value=19990.0, shares=1000.0)
+    m = M.Model(tables={"role": {"CEO": 0.0}}, counts={}, weights={"role": 1.0}, beta=0.0)
+    out, hidden = R.rank([res(low, r20=None), res(high, r20=None), res(ok, r20=None)],
+                         [sig(), sig(), sig()], src, m, as_of)
+    assert hidden["ticker_mismatch"] == 2
+    assert [(r.result.event.ticker, r.result.event.filer_id) for r in out] == [("B", 2)]
