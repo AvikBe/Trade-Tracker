@@ -139,7 +139,10 @@ cross-checking 260 filings against their XML:
   filing. Amendments of filings older than the loaded history stay unlinked, and
   `tt report` shows how many.
 - Joint filings list their owners in a different order in the two sources, so both
-  parsers pick the most senior owner, then the lowest CIK.
+  parsers pick the most senior owner, then the lowest CIK. Every joint owner is kept
+  in `filing_owners`, because a joint 4/A can add or drop owners (Mithaq Capital's
+  Children's Place filings, Feb 2024), and amendments match originals on any
+  shared owner.
 - Row order in the data sets is not document order, and the ownership nature
   (spouse, trust) is sometimes on the wrong row. Side, date, shares and price agree.
 - Filers type tickers like `NONE`, `(SIRI)`, `NYSE: SCS` or `Z AND ZG`; they are

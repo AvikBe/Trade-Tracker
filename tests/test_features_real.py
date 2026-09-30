@@ -70,13 +70,17 @@ def test_plce_run_up_before_disclosure(loaded):
     assert all(r[7] == ["amendment_duplicate"] and r[2] == date(2024, 2, 15) for r in amended)
 
 
-def test_plce_amendments_filed_under_another_joint_filer_stay_unlinked(loaded):
-    # Known gap: the 4/As list Mithaq Capital first, the originals Alrajhi, so milestone 1
-    # sees two filers and cannot link them. Their lines are dated by the 4/A.
-    orig = _rows(loaded, "0001104659-24-022552")[0]
-    amended = _rows(loaded, "0001104659-24-025044")[0]
-    assert float(orig[4]) == pytest.approx((11.29 / 12.505 - 1) * 100)
-    assert amended[7] == ["amendment"] and amended[2] == date(2024, 2, 16)
+def test_plce_amendments_filed_under_another_joint_filer_repeat_the_originals(loaded):
+    # The 4/As list Mithaq Capital first and the originals list Alrajhi. Milestone 1 links
+    # them through the shared owner, so each 4/A line keeps its original filing date and
+    # drift, and the group counts as one insider.
+    for orig_acc, amend_acc in [("0001104659-24-022552", "0001104659-24-025044"),
+                                ("0001104659-24-024181", "0001104659-24-025045")]:
+        orig, amended = _rows(loaded, orig_acc)[0], _rows(loaded, amend_acc)[0]
+        assert amended[7] == ["amendment_duplicate"]
+        assert amended[2] == orig[2] and amended[4] == orig[4] and amended[5] == orig[5] == 1
+    assert float(_rows(loaded, "0001104659-24-022552")[0][4]) == pytest.approx(
+        (11.29 / 12.505 - 1) * 100)
 
 
 def test_nbix_planned_sales_flip_drift_sign(loaded):

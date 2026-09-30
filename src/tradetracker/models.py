@@ -37,5 +37,6 @@ class ParsedFiling:
     accepted_at: datetime | None = None
     source_url: str | None = None
     original_filed_on: date | None = None  # amendments: when the original was filed
+    owner_ciks: list[str] = field(default_factory=list)  # every joint owner
     trades: list[ParsedTrade] = field(default_factory=list)
     raw: dict | None = None
