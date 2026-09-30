@@ -2,6 +2,7 @@
 
 import argparse
 import logging
+import os
 import sys
 from datetime import date
 from pathlib import Path
@@ -12,6 +13,7 @@ from .features import job as features_job
 from .features import summary as features_summary
 from .edgar.client import EdgarClient
 from .edgar.form4 import parse_form4
+from .prices import cache as price_cache
 from .prices import loader
 from .prices.tiingo import TiingoClient
 
@@ -126,6 +128,46 @@ def cmd_load_prices(args, settings):
     print(stats)
 
 
+# The quarters the phase 2 report used, most recent first, then the other loaded ones.
+# Within each |-separated group, tickers with buys come before sell-only tickers.
+PRICE_ORDER = "2024q1,2023q4,2023q3,2023q2,2023q1|2026q2,2022q4,2020q1,2018q3,2015q1"
+
+
+def _price_cache(args) -> price_cache.PriceCache:
+    return price_cache.PriceCache(args.cache or os.environ.get("TT_PRICE_CACHE", "data/price-cache"))
+
+
+def cmd_price_universe(args, settings):
+    cache = _price_cache(args)
+    with db.connect(settings.database_url) as conn:
+        rows = price_cache.build_universe(conn)
+    cache.write_universe(rows)
+    print(f"{len(rows)} quarter-ticker rows, {len({r['ticker'] for r in rows})} tickers "
+          f"-> {cache.universe_path}")
+
+
+def cmd_fetch_prices(args, settings):
+    cache = _price_cache(args)
+    client = TiingoClient(settings.require_tiingo())
+    try:
+        stats = price_cache.run(cache, client, price_cache.parse_order(args.order), limit=args.limit)
+    finally:
+        client.close()
+    print(stats)
+    print((cache.root / "coverage.txt").read_text() if (cache.root / "coverage.txt").exists() else "")
+
+
+def cmd_import_prices(args, settings):
+    cache = _price_cache(args)
+    with db.connect(settings.database_url) as conn:
+        print(price_cache.import_to_db(cache, conn))
+
+
+def cmd_price_coverage(args, settings):
+    cache = _price_cache(args)
+    print(price_cache.coverage_report(cache, price_cache.parse_order(args.order), price_cache.utcnow()))
+
+
 def cmd_validate(args, settings):
     with db.connect(settings.database_url) as conn:
         print(validate.run(conn))
@@ -215,6 +257,18 @@ def main(argv: list[str] | None = None) -> int:
     lp = sub.add_parser("load-prices", help="backfill/update prices within Tiingo quota")
     lp.add_argument("--limit", type=int, help="max requests this run")
     lp.set_defaults(fn=cmd_load_prices)
+
+    for name, fn, text in [
+        ("price-universe", cmd_price_universe, "write the tickers to price into the cache"),
+        ("fetch-prices", cmd_fetch_prices, "fill the file price cache within Tiingo quota (hourly)"),
+        ("import-prices", cmd_import_prices, "copy the file price cache into daily_prices"),
+        ("price-coverage", cmd_price_coverage, "price cache coverage per quarter"),
+    ]:
+        pc = sub.add_parser(name, help=text)
+        pc.add_argument("--cache", help="cache directory (default $TT_PRICE_CACHE or data/price-cache)")
+        pc.add_argument("--order", default=PRICE_ORDER, help="quarter priority: comma separated, groups split by |")
+        pc.add_argument("--limit", type=int, help="max requests this run")
+        pc.set_defaults(fn=fn)
 
     sub.add_parser("validate", help="apply validation rules").set_defaults(fn=cmd_validate)
     sub.add_parser("report", help="milestone 1 coverage report").set_defaults(fn=cmd_report)
