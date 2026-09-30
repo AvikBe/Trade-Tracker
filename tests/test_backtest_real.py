@@ -133,7 +133,7 @@ def test_rmcf_joint_filers_are_one_event(results):
 def test_report_on_real_events(results, tmp_path):
     res, ex = results
     text = study.render(res, ex, "fixture")
-    assert "Buys (open-market purchases, no 10b5-1)" in text
+    assert "Buys, liquid (primary)" in text
     study.write_events(res, tmp_path / "events.csv.gz")
     assert (tmp_path / "events.csv.gz").stat().st_size > 0
 

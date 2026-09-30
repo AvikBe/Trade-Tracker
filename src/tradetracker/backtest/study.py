@@ -214,6 +214,9 @@ def walk_forward(results: list[Result], h: int = PRIMARY_H) -> list[FoldResult]:
     training return overlaps a test-year day. The fitted "model" is the spec's first
     study itself: mean return per lag bucket and per drift quintile, with quintile
     cutoffs from the training years only.
+
+    Returns are winsorized at the training years' 1st and 99th percentiles, so one
+    sub-penny stock that rises 1,000x in a test year can't decide the fold.
     """
     rows = [x for x in results if x.r(h) is not None and x.outcome.drift_pct is not None]
     years = sorted({x.outcome.entry.year for x in rows})
@@ -225,21 +228,26 @@ def walk_forward(results: list[Result], h: int = PRIMARY_H) -> list[FoldResult]:
         if len(train) < 100 or len(test) < 20:
             continue
         cut = drift_cutoffs(train)
-        overall = _mean([x.r(h) for x in train])
+        lo, hi = stats.winsor_cutoffs([x.r(h) for x in train])
+
+        def v(x):
+            return min(max(x.r(h), lo), hi)
+
+        overall = _mean([v(x) for x in train])
 
         def split(rs):
-            late = [x.r(h) for x in rs if x.event.lag_days > 2]
-            prompt = [x.r(h) for x in rs if x.event.lag_days <= 2]
+            late = [v(x) for x in rs if x.event.lag_days > 2]
+            prompt = [v(x) for x in rs if x.event.lag_days <= 2]
             d = by_drift(rs, cut)
-            q1 = [x.r(h) for x in d.get(0, [])]
-            q5 = [x.r(h) for x in d.get(len(cut), [])]
+            q1 = [v(x) for x in d.get(0, [])]
+            q5 = [v(x) for x in d.get(len(cut), [])]
             diff = lambda a, b: (_mean(a) - _mean(b)) if a and b else None  # noqa: E731
             return diff(late, prompt), diff(q5, q1)
 
         lag_is, drift_is = split(train)
         lag_oos, drift_oos = split(test)
-        lag_means = {k: _mean([x.r(h) for x in v]) for k, v in by_lag(train).items()}
-        drift_means = {k: _mean([x.r(h) for x in v]) for k, v in by_drift(train, cut).items()}
+        lag_means = {k: _mean([v(x) for x in g]) for k, g in by_lag(train).items()}
+        drift_means = {k: _mean([v(x) for x in g]) for k, g in by_drift(train, cut).items()}
 
         def predict(x):
             lb = lag_means.get(lag_bucket(x.event.lag_days), overall)
@@ -247,7 +255,7 @@ def walk_forward(results: list[Result], h: int = PRIMARY_H) -> list[FoldResult]:
             return lb + dq - overall
 
         preds = [predict(x) for x in test]
-        realized = [x.r(h) for x in test]
+        realized = [v(x) for x in test]
         ic = stats.spearman(preds, realized)
         order = sorted(range(len(test)), key=lambda i: (preds[i], test[i].outcome.entry))
         k = len(order) // 5
@@ -477,14 +485,17 @@ def render(results: list[Result], exclusions: Exclusions, source_name: str,
         "",
     ]
     lines += extra or []
-    lines.append(section_for("Buys (open-market purchases, no 10b5-1)", buys))
     liquid = [x for x in buys if x.liquid]
     lines.append(section_for(
-        f"Buys, liquid only (entry price >= ${MIN_LIQUID_PRICE:.0f}, median dollar volume "
-        f">= ${MIN_LIQUID_DOLLAR_VOLUME:,})", liquid))
-    lines.append(section_for("Buys, one event per stock and entry day", dedupe_ticker_day(buys)))
-    lines.append(section_for("Sells (no 10b5-1)", sells))
-    lines.append(section_for("Sells under 10b5-1 plans", plan_sells))
+        f"Buys, liquid (primary): entry price >= ${MIN_LIQUID_PRICE:.0f}, median dollar "
+        f"volume >= ${MIN_LIQUID_DOLLAR_VOLUME:,}, no 10b5-1", liquid))
+    lines.append(section_for("Buys, liquid, one event per stock and entry day",
+                             dedupe_ticker_day(liquid)))
+    lines.append(section_for("All buys, including penny and untraded stocks (heavy tails: "
+                             "read the median and winsorized mean)", buys))
+    lines.append(section_for("Sells, liquid, no 10b5-1", [x for x in sells if x.liquid]))
+    lines.append(section_for("Sells under 10b5-1 plans, liquid",
+                             [x for x in plan_sells if x.liquid]))
     return "\n".join(lines)
 
 

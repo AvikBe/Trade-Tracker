@@ -394,6 +394,8 @@ def test_walk_forward_finds_a_planted_effect_and_purges_overlap():
             # Returns fall with drift and rise with lateness, plus noise.
             r = -0.001 * drift + (0.02 if lag > 2 else 0.0) + rng.gauss(0, 0.02)
             rs.append(_result(entry, lag, drift, r))
+    # A sub-penny stock up 1,000x in a prompt, low-drift event: winsorized away.
+    rs.append(_result(date(2019, 6, 3), 1, -15.0, 1000.0))
     folds = study.walk_forward(rs)
     assert [f.year for f in folds] == [2017, 2018, 2019, 2020]
     for f in folds:
@@ -426,7 +428,7 @@ def test_report_renders_on_synthetic_results():
                   rng.uniform(-10, 30), rng.gauss(0.01, 0.05), side=rng.choice(["buy", "sell"]))
           for y in range(2015, 2020) for _ in range(200)]
     text = study.render(rs, Exclusions(), "synthetic")
-    assert "## Buys (open-market purchases, no 10b5-1)" in text
+    assert "## Buys, liquid (primary)" in text
     assert "very late (5+ days, >2x)" in text and "Walk-forward" in text
 
 

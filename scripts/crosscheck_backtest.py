@@ -100,12 +100,12 @@ def check_returns(run: pd.DataFrame, root: Path, sample: int, seed: int) -> list
     counts = {k: 0 for k in ("checked", "entry_day", "drift", "stock", "spy", "sector", "iwm", "exit_day")}
     worst = {}
 
-    def cmp(name, a, b, ident):
+    def cmp(name, a, b, ident, tol=TOL):
         if (a is None or (isinstance(a, float) and math.isnan(a))) and (
                 b is None or (isinstance(b, float) and math.isnan(b))):
             return
         if a is None or b is None or (isinstance(a, float) and math.isnan(a)) or (
-                isinstance(b, float) and math.isnan(b)) or abs(a - b) > TOL * max(1, abs(b)):
+                isinstance(b, float) and math.isnan(b)) or abs(a - b) > tol * max(1, abs(b)):
             counts[name] += 1
             worst.setdefault(name, ident)
 
@@ -132,7 +132,8 @@ def check_returns(run: pd.DataFrame, root: Path, sample: int, seed: int) -> list
         if len(t0) and (pd.Timestamp(r.first_trade_date).date() - t0.index[-1]).days <= 5 and len(pre) \
                 and pre.index[-1] >= t0.index[-1]:
             move = pre["adjClose"].iloc[-1] / t0["adjClose"].iloc[-1] - 1
-            cmp("drift", 100 * (-move if r.side == "sell" else move), r.drift_pct, ident)
+            # events.csv.gz keeps drift to 4 decimals
+            cmp("drift", 100 * (-move if r.side == "sell" else move), r.drift_pct, ident, 1e-4)
         sector = bars(root, r.sector, cache) if r.sector and r.sector != "SPY" else spy
         iwm = bars(root, "IWM", cache)
         for h in HORIZONS:
