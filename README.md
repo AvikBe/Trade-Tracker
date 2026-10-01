@@ -60,9 +60,10 @@ tt import-prices --cache DIR      # copy the cache into daily_prices (idempotent
   2023q1, then 2026q2, 2022q4, 2020q1, 2018q3, 2015q1), and within a quarter by buy
   count, so the monthly symbol quota covers as many buys as possible.
 - Budgets keep headroom: 45 calls an hour, 950 a day and 480 new symbols per calendar
-  month (UTC), counted from `calls.csv` (a paid plan raises them with `TT_TIINGO_HOURLY`,
+  month (US Eastern, when Tiingo resets it), counted from `calls.csv` (a paid plan raises them with `TT_TIINGO_HOURLY`,
   `TT_TIINGO_DAILY` and `TT_TIINGO_SYMBOLS`). A quota refusal from Tiingo stops the run and
-  sets a cooldown (55 minutes, 6 hours, or 24 hours for the symbol quota).
+  sets a cooldown (55 minutes, 6 hours, or for the symbol quota
+  until the next Eastern month starts, at most 24 hours).
 - Unknown tickers are marked `not_found`, tickers with no bars since 2014 `empty`, and
   network or server errors are retried an hour apart, three attempts in all.
 - Coverage counts a ticker for a quarter only when its bars span that quarter, which

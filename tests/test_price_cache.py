@@ -134,11 +134,31 @@ def test_budget_counts_hour_day_and_calendar_month_symbols():
     assert b.allows("T0") and not b.allows("NEW")
 
 
-def test_month_boundary_resets_symbols():
-    calls = [pc.Call(datetime(2026, 9, 30, 23, 0, tzinfo=timezone.utc), f"S{i}", "ok") for i in range(480)]
-    assert pc.budget(calls, datetime(2026, 9, 30, 23, 30, tzinfo=timezone.utc)).symbols == 0
-    b = pc.budget(calls, datetime(2026, 10, 1, 0, 5, tzinfo=timezone.utc))
+def test_month_boundary_resets_symbols_at_eastern_midnight():
+    utc = timezone.utc
+    calls = [pc.Call(datetime(2026, 9, 30, 23, 0, tzinfo=utc), f"S{i}", "ok") for i in range(480)]
+    assert pc.budget(calls, datetime(2026, 9, 30, 23, 30, tzinfo=utc)).symbols == 0
+    # 00:20 UTC on Oct 1 is still September in New York, where Tiingo counts the month.
+    assert pc.budget(calls, datetime(2026, 10, 1, 0, 20, tzinfo=utc)).symbols == 0
+    b = pc.budget(calls, datetime(2026, 10, 1, 4, 5, tzinfo=utc))  # 00:05 EDT
     assert b.symbols == pc.MONTHLY_SYMBOL_BUDGET and b.daily == pc.DAILY_BUDGET - 480
+
+
+def test_month_start_handles_dst_and_year_end():
+    utc = timezone.utc
+    assert pc.month_start(datetime(2026, 10, 15, tzinfo=utc)) == datetime(2026, 10, 1, 4, tzinfo=utc)  # EDT
+    assert pc.month_start(datetime(2026, 12, 15, tzinfo=utc)) == datetime(2026, 12, 1, 5, tzinfo=utc)  # EST
+    assert pc.next_month_start(datetime(2026, 12, 31, 12, tzinfo=utc)) == datetime(2027, 1, 1, 5, tzinfo=utc)
+    assert pc.next_month_start(datetime(2027, 1, 1, 3, tzinfo=utc)) == datetime(2027, 1, 1, 5, tzinfo=utc)
+
+
+def test_symbol_cooldown_ends_at_next_eastern_month():
+    utc = timezone.utc
+    at = datetime(2026, 10, 1, 0, 20, tzinfo=utc)  # 20:20 EDT on Sep 30
+    assert pc.cooldown_until("symbols", at) == datetime(2026, 10, 1, 4, 5, tzinfo=utc)
+    mid = datetime(2026, 10, 10, tzinfo=utc)
+    assert pc.cooldown_until("symbols", mid) == mid + timedelta(hours=24)
+    assert pc.cooldown_until("hourly", at) == at + pc.COOLDOWN["hourly"]
 
 
 # ---- the job -------------------------------------------------------------------------

@@ -30,6 +30,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import httpx
 
@@ -52,6 +53,9 @@ COOLDOWN = {
     "daily": timedelta(hours=6),
     "symbols": timedelta(hours=24),
 }
+# Tiingo's monthly symbol quota resets at midnight US Eastern, not UTC: on 2026-10-01 at
+# 00:20 UTC it still refused new symbols "for this month".
+QUOTA_TZ = ZoneInfo("America/New_York")
 DONE = {"ok", "empty", "not_found", "failed"}
 BENCHMARK_QUARTER = "benchmark"
 
@@ -81,7 +85,7 @@ class Call:
 class Budget:
     hourly: int
     daily: int
-    symbols: int  # new symbols still allowed this calendar month (UTC)
+    symbols: int  # new symbols still allowed this quota month (US Eastern)
     used_symbols: set[str] = field(default_factory=set)
 
     def allows(self, ticker: str) -> bool:
@@ -198,9 +202,29 @@ class PriceCache:
 
 
 # ---- planning ----------------------------------------------------------------------
+def month_start(now: datetime) -> datetime:
+    """Start of Tiingo's quota month (US Eastern) containing `now`, in UTC."""
+    local = now.astimezone(QUOTA_TZ)
+    return local.replace(day=1, hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+
+
+def next_month_start(now: datetime) -> datetime:
+    local = now.astimezone(QUOTA_TZ)
+    year, month = (local.year + 1, 1) if local.month == 12 else (local.year, local.month + 1)
+    return datetime(year, month, 1, tzinfo=QUOTA_TZ).astimezone(timezone.utc)
+
+
+def cooldown_until(kind: str, at: datetime) -> datetime:
+    """A symbol refusal lifts at the next quota month, but never later than 24 hours on."""
+    until = at + COOLDOWN[kind]
+    if kind == "symbols":
+        until = min(until, next_month_start(at) + timedelta(minutes=5))
+    return until
+
+
 def budget(calls: list[Call], now: datetime) -> Budget:
-    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    used = {c.ticker for c in calls if c.at >= month_start}
+    start = month_start(now)
+    used = {c.ticker for c in calls if c.at >= start}
     return Budget(
         hourly=HOURLY_BUDGET - sum(c.at > now - timedelta(hours=1) for c in calls),
         daily=DAILY_BUDGET - sum(c.at > now - timedelta(days=1) for c in calls),
@@ -316,7 +340,7 @@ def run(cache: PriceCache, client, order: list[str], *, now=utcnow, limit: int |
             except RateLimited as e:
                 cache.log_call(at, ticker, f"limited_{e.kind}")
                 state = {
-                    "cooldown_until": (at + COOLDOWN[e.kind]).isoformat(),
+                    "cooldown_until": cooldown_until(e.kind, at).isoformat(),
                     "cooldown_reason": str(e)[:300],
                 }
                 cache.save_state(state)
