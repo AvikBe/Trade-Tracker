@@ -41,7 +41,8 @@ tt backtest --prices DIR|db --sic sic.csv --out results/   # the first study
 tt score-backtest --prices DIR --sic sic.csv --out results/   # milestone 4: fit and test the score
 tt rank --model results/model.json --prices DIR [--as-of DATE]  # top 20 recent buys, with reasons
 tt fetch-shares --out shares.csv        # SEC share counts, for the market-cap floor
-tt score-backtest ... --shares shares.csv --min-cap 50 --horizon 60 --bench beta --vol-target 0.4 --variants
+tt insider-history --quarters 2012q1:2026q2 --out history.csv.gz   # routine vs opportunistic
+tt score-backtest ... --shares shares.csv --min-cap 50 --horizon 60 --bench beta --vol-target 0.4 --variants cap
 ```
 
 `load-prices` spends at most the remaining hourly and daily Tiingo quota per run and
@@ -179,7 +180,8 @@ walk-forward; `tt rank` applies the fitted `model.json` to recent filings.
 `scripts/crosscheck_scoring.py` recomputes a run without `tradetracker.scoring`: stake
 change from SQL, repeat buys, track records and drawdowns with pandas, every score from
 its fold's model, each fold's tables and weights (scipy), and the portfolio. With
-`--shares` it also rebuilds market caps, betas and volatilities from the raw bars.
+`--shares` it also rebuilds market caps, betas and volatilities from the raw bars, and
+with `--insiders` it reclassifies every insider with pandas.
 
 ### Market cap, longer holds and volatility control
 
@@ -200,6 +202,16 @@ around the same model (`--variants` compares five of them in one report):
   up to 250 daily returns before entry (at least 60; clipped to 0-3, 1 when unknown).
 - **Volatility-scaled positions** (`--vol-target 0.4`): in the top-20 portfolio a
   position is vol_target / its annualized volatility of a slot, at most 2 slots.
+
+### Routine vs opportunistic insiders
+
+`tt insider-history` reads every open-market buy and sale from the SEC data sets
+(further back than the database, so 2015 trades can be classified). With
+`--insiders history.csv.gz`, each event gets Cohen, Malloy and Pomorski's (2012) type:
+an insider who traded in each of the previous three calendar years (trades filed by 1
+January) is routine if one calendar month had a trade in all three, else opportunistic.
+`--insider-component` adds the type to Q, `--only-type opportunistic` shows only those
+buys, and `--variants insider` compares five such setups (with a routine-only control).
 
 ## Tests
 

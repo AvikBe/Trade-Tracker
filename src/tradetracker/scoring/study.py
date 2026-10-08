@@ -53,6 +53,8 @@ class Config:
       stock minus beta x SPY, with the beta measured before entry (`add_beta_legs`).
     - `min_cap`: hide events whose market cap at entry is below this or unknown (the
       spec's $50M floor), or None for the phase 4 liquidity stand-in alone.
+    - `only_type`: hide buys whose insider isn't of this type (`insiders`).
+    - `components`: Q's components, or None for phase 4's.
     - `vol_target`: size portfolio positions at vol_target / the stock's volatility
       (at most `MAX_WEIGHT` slots), or None for equal slots.
     """
@@ -61,6 +63,8 @@ class Config:
     bench: str = "spy"
     min_cap: float | None = None
     vol_target: float | None = None
+    only_type: str | None = None             # show only "opportunistic" (or "routine") buys
+    components: tuple[str, ...] | None = None    # None: phase 4's (M.BASE_COMPONENTS)
 
     def label(self) -> str:
         parts = [f"{self.h} days", "beta-hedged" if self.bench == "beta" else f"vs {self.bench.upper()}"]
@@ -68,7 +72,14 @@ class Config:
             parts.append(f"cap >= ${self.min_cap / 1e6:.0f}M")
         if self.vol_target:
             parts.append(f"vol-sized to {100 * self.vol_target:.0f}%")
+        if self.only_type:
+            parts.append(f"{self.only_type} insiders only")
+        if self.components and "insider type" in self.components:
+            parts.append("insider type in Q")
         return ", ".join(parts)
+
+    def comps(self) -> list[str]:
+        return list(self.components or M.BASE_COMPONENTS)
 
 
 PHASE4 = Config()
@@ -81,6 +92,16 @@ VARIANTS = [
     Config("cap floor, 20 days, vol control", bench="beta", min_cap=50e6, vol_target=0.40),
     Config("cap floor, 60 days, vol control", h=60, bench="beta", min_cap=50e6,
            vol_target=0.40),
+]
+# The next approach avik asked for on 2026-10-08: Cohen, Malloy and Pomorski's routine vs
+# opportunistic insiders. "routine only" is a control: the paper predicts no edge there.
+WITH_TYPE = tuple(M.BASE_COMPONENTS) + ("insider type",)
+CMP_VARIANTS = [
+    PHASE4,
+    Config("insider type in Q", components=WITH_TYPE),
+    Config("opportunistic only", only_type="opportunistic"),
+    Config("opportunistic only, 60 days", h=60, only_type="opportunistic"),
+    Config("routine only (control)", only_type="routine"),
 ]
 
 
@@ -102,7 +123,8 @@ def shown(x: Result, s: Signals, cfg: Config = PHASE4) -> bool:
     e = x.event
     return (x.ok and e.side == "buy" and not e.is_10b5_1 and x.liquid
             and (s.drift is None or s.drift <= MAX_DRIFT_SHOWN)
-            and (cfg.min_cap is None or (s.market_cap is not None and s.market_cap >= cfg.min_cap)))
+            and (cfg.min_cap is None or (s.market_cap is not None and s.market_cap >= cfg.min_cap))
+            and (cfg.only_type is None or s.insider_type == cfg.only_type))
 
 
 @dataclass
@@ -160,7 +182,8 @@ def walk_forward(results: list[Result], signals: list[Signals], h: int | None = 
         _, ss, ys = training_set(pool, cfg.h, date(y, 1, 1), cfg.bench)
         if len(ys) < 500:
             continue
-        m = M.fit(ss, ys, label=f"before {y}", components=components, beta=beta)
+        m = M.fit(ss, ys, label=f"before {y}", components=components or cfg.comps(),
+                  beta=beta)
         test = []
         for x, s in pool:
             if x.outcome.entry.year == y:
@@ -391,7 +414,7 @@ def decay_table(top: list[Scored], prices, h: int = PRIMARY_H,
 # ---------------------------------------------------------------- report
 
 def weights_table(folds: list[Fold]) -> str:
-    names = list(M.COMPONENTS)
+    names = [c for c in M.COMPONENTS if any(c in f.model.weights for f in folds)]
     rows = [[f.year] + [num(1e4 * f.model.weights.get(c, 0.0) *
                             (max(f.model.tables[c].values()) - min(f.model.tables[c].values())), 0)
                         if c in f.model.weights else "" for c in names]
@@ -445,8 +468,8 @@ def ablation(results, signals, base_top, cfg: Config = PHASE4) -> str:
     rows = []
     b = _summ(base_top, cfg.h, cfg.bench)
     rows.append(["all components", b.n, pct(b.mean), num(b.t_cluster)])
-    variants = [(f"without {c}", [n for n in M.COMPONENTS if n != c], None)
-                for c in M.COMPONENTS]
+    variants = [(f"without {c}", [n for n in cfg.comps() if n != c], None)
+                for c in cfg.comps()]
     variants.append(("no drift penalty (beta 0)", None, 0.0))
     for label, comps, beta in variants:
         folds = walk_forward(results, signals, components=comps, beta=beta, cfg=cfg)
@@ -454,6 +477,30 @@ def ablation(results, signals, base_top, cfg: Config = PHASE4) -> str:
         s = _summ(top, cfg.h, cfg.bench)
         rows.append([label, s.n, pct(s.mean), num(s.t_cluster)])
     return table(["model", "above cutoff", f"net mean, {cfg.h} days", "t (clustered)"], rows)
+
+
+def type_table(results, signals, cfg: Config = PHASE4) -> str:
+    """Every shown buy (no model), by insider type: does the paper's split hold here?
+    Unclassified insiders traded in fewer than three of the previous three years."""
+    base = replace(cfg, only_type=None)
+    groups: dict[str, list[Scored]] = defaultdict(list)
+    for x, s in zip(results, signals):
+        if shown(x, s, base):
+            groups[s.insider_type or "unclassified"].append(
+                Scored(x, s, 0.0, 0.0, x.outcome.entry.year, False))
+    years = sorted({x.year for g in groups.values() for x in g})
+    rows = []
+    for kind in ("opportunistic", "routine", "unclassified"):
+        g = groups.get(kind, [])
+        s = _summ(g, cfg.h, cfg.bench)
+        by_year = []
+        for y in years:
+            sy = _summ([x for x in g if x.year == y], cfg.h, cfg.bench)
+            by_year.append(pct(sy.mean) if sy.n else "")
+        rows.append([kind, s.n, pct(s.mean), num(s.t_cluster),
+                     pct(hit_rate(g, cfg.h, cfg.bench), 1)] + by_year)
+    return table(["insider type", "n", f"net mean, {cfg.h} days", "t (clustered)",
+                  "hit rate"] + [str(y) for y in years], rows)
 
 
 def run_config(results, signals, prices, cfg: Config) -> tuple[list[Fold], dict, Portfolio]:
@@ -505,6 +552,7 @@ def render(results: list[Result], signals: list[Signals], prices, final: M.Model
         "",
         "Shown events (liquid open-market buys, no 10b5-1, drift <= 20%"
         + (f", market cap >= ${cfg.min_cap / 1e6:.0f}M" if cfg.min_cap else "")
+        + (f", {cfg.only_type} insiders only" if cfg.only_type else "")
         + f"): {pool_n}. Test years: {', '.join(str(f.year) for f in folds)}.",
         "",
         "## Spec go-live criteria",
@@ -517,6 +565,12 @@ def render(results: list[Result], signals: list[Signals], prices, final: M.Model
                   "The same model and walk-forward under each setup. Every number is out of "
                   "sample, but picking the best row after seeing them all is a choice made "
                   "in sample: five setups were tried.", "", variants, ""]
+    if any(s.insider_type for s in signals):
+        lines += ["## Routine vs opportunistic insiders (all shown buys, no model)", "",
+                  "Cohen, Malloy and Pomorski's split: an insider who traded in each of the "
+                  "previous three calendar years is routine if one calendar month had a "
+                  "trade in all three, else opportunistic. Returns are "
+                  f"{h}-day {what} after costs.", "", type_table(results, signals, cfg), ""]
     lines += [
         "## By test year",
         "",
@@ -607,7 +661,7 @@ def fit_final(results, signals, h: int | None = None, half_life: float | None = 
         cfg = replace(cfg, h=h)
     pool = [(x, s) for x, s in zip(results, signals) if shown(x, s, cfg)]
     _, ss, ys = training_set(pool, cfg.h, date.max, cfg.bench)
-    m = M.fit(ss, ys, label="all years")
+    m = M.fit(ss, ys, label="all years", components=cfg.comps())
     if half_life:
         m.half_life = half_life
     return m
@@ -618,7 +672,7 @@ def fit_final(results, signals, h: int | None = None, half_life: float | None = 
 SCORED_COLUMNS = ["year", "filer_id", "issuer_cik", "ticker", "filing_date", "entry", "exit", "score",
                   "quality", "above", "role", "value", "stake_change", "cluster_count", "repeat_buys",
                   "drawdown", "track_record", "track_n", "dollar_volume", "drift", "cost",
-                  "market_cap", "beta", "vol", "target", "gross", "excess_5", "excess_20", "excess_60"]
+                  "market_cap", "beta", "vol", "insider_type", "target", "gross", "excess_5", "excess_20", "excess_60"]
 
 
 def _write(rows: list[Scored], path: Path, cfg: Config = PHASE4) -> None:
@@ -633,7 +687,7 @@ def _write(rows: list[Scored], path: Path, cfg: Config = PHASE4) -> None:
                     repr(s.value), _r(s.stake_change), s.cluster_count,
                     s.repeat_buys, _r(s.drawdown), _r(s.track_record), s.track_n,
                     _r(s.dollar_volume), _r(s.drift), _r(o.cost),
-                    _r(s.market_cap), _r(s.beta), _r(s.vol),
+                    _r(s.market_cap), _r(s.beta), _r(s.vol), s.insider_type or "",
                     _r(x.r(cfg.h, cfg.bench, net=True)), _r(x.r(cfg.h, cfg.bench))]
                    + [_r(x.r(h)) for h in HORIZONS])
     path.write_bytes(gzip.compress(buf.getvalue().encode()))

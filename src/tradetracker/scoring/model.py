@@ -85,7 +85,16 @@ COMPONENTS: dict[str, tuple] = {
                          ["<$1M/day", "$1-5M/day", "$5-50M/day", ">=$50M/day"], "<$1M/day"),
         ["<$1M/day", "$1-5M/day", "$5-50M/day", ">=$50M/day"],
     ),
+    # Routine vs opportunistic insiders (see `tradetracker.insiders`). Not in the phase 4
+    # model: only setups that name it use it.
+    "insider type": (
+        lambda s: s.insider_type or "unclassified",
+        ["opportunistic", "routine", "unclassified"],
+    ),
 }
+# Phase 4's components: the default when a fit names none.
+BASE_COMPONENTS = ["role", "value", "stake", "cluster", "repeat", "drawdown", "track",
+                   "liquidity"]
 
 
 def bucket(name: str, s: Signals) -> str:
@@ -197,7 +206,7 @@ def fit(signals: list[Signals], ys: list[float], label: str = "",
     """Fit bucket tables, weights and beta on training events (returns in `ys`)."""
     if len(signals) != len(ys) or not ys:
         raise ValueError("need one return per signal, and at least one")
-    names = components or list(COMPONENTS)
+    names = components or list(BASE_COMPONENTS)
     y = winsorize(ys)
     overall = sum(y) / len(y)
 
@@ -246,6 +255,8 @@ def _money(v: float) -> str:
 def reason(s: Signals, ticker: str, days_since_filing: int = 0) -> str:
     """One line in the spec's style, e.g. 'CFO + 2 insiders bought $3.1M in XYZ ...'."""
     who = s.role or "Insider"
+    if s.insider_type:
+        who = f"{who} ({s.insider_type} trader)"
     parts = [f"{who} bought {_money(s.value)} of {ticker}"]
     if s.stake_change is not None:
         parts.append("a new stake" if s.stake_change >= NEW_STAKE
