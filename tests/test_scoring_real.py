@@ -124,7 +124,7 @@ def test_cli_score_backtest_and_rank(scored, tmp_path, monkeypatch, capsys):
         assert (out / name).exists()
     # One quarter is too little history for a test year, but the final model still fits.
     m = M.Model.from_json((out / "model.json").read_text())
-    assert m.n_train > 0 and set(m.weights) == set(M.COMPONENTS)
+    assert m.n_train > 0 and set(m.weights) == set(M.BASE_COMPONENTS)
     capsys.readouterr()
     assert cli.main(["rank", *args, "--model", str(out / "model.json"),
                      "--as-of", "2024-02-16"]) == 0
@@ -180,7 +180,8 @@ def test_cli_cap_floor_hedged_run_and_its_cross_check(scored, tmp_path, monkeypa
     assert all(float(r["market_cap"]) >= 50e6 for r in rows)
     summary = json.loads((out / "summary.json").read_text())
     assert summary["config"] == {"name": "cap floor, vol control", "h": 20, "bench": "beta",
-                                 "min_cap": 50e6, "vol_target": 0.4}
+                                 "min_cap": 50e6, "vol_target": 0.4, "only_type": None,
+                                 "components": None}
     assert "cap >= $50M" in (out / "report.md").read_text()
     path = Path(__file__).parents[1] / "scripts" / "crosscheck_scoring.py"
     spec = importlib.util.spec_from_file_location("crosscheck_scoring", path)
@@ -188,3 +189,59 @@ def test_cli_cap_floor_hedged_run_and_its_cross_check(scored, tmp_path, monkeypa
     spec.loader.exec_module(xc)
     assert xc.run_checks(out, REAL / "backtest_bars", os.environ["TT_TEST_DATABASE_URL"],
                          shares=shares) == []
+
+
+def test_real_insiders_classified_by_hand():
+    """From the SEC data sets, typed from tests/fixtures/real/insider_history.csv.gz.
+
+    RMCF director Jeffrey Geygan (CIK 1733547) bought in May, Aug and Nov 2021 (Crimson
+    Wine and RMCF), Jan, Jun, Aug, Oct and Nov 2022, and May, Jul, Aug and Nov 2023:
+    August and November repeat in all three years, so his 2024 buys are routine.
+    CTBI's James Draughn (1215235) sold in Apr, May and Nov 2021, Oct 2022 and Dec 2023:
+    every year, no repeated month, so opportunistic. Andy Waters (1509839) didn't trade
+    in 2023: unclassified."""
+    from tradetracker.insiders import Classifier
+
+    c = Classifier.load(REAL / "insider_history.csv.gz")
+    assert c.kind_in_year("1733547", 2024) == "routine"
+    assert c.kind_in_year("1215235", 2024) == "opportunistic"
+    assert c.kind_in_year("1509839", 2024) is None
+    assert c.kind_in_year("1215235", 2023) is None        # the fixture starts in 2020
+
+
+def test_cli_insider_run_and_its_cross_check(scored, tmp_path, monkeypatch, capsys):
+    import csv
+    import gzip
+    import importlib.util
+    import os
+
+    pytest.importorskip("pandas")
+    pytest.importorskip("scipy")
+    from tradetracker import cli
+
+    monkeypatch.setenv("DATABASE_URL", os.environ["TT_TEST_DATABASE_URL"])
+    out = tmp_path / "run"
+    hist = REAL / "insider_history.csv.gz"
+    args = ["--prices", str(REAL / "backtest_bars"), "--sic", str(REAL / "backtest_sic.csv"),
+            "--insiders", str(hist)]
+    assert cli.main(["score-backtest", *args, "--out", str(out), "--no-ablation",
+                     "--insider-component", "--variants", "insider",
+                     "--name", "insider type in Q"]) == 0
+    rows = list(csv.DictReader(gzip.open(out / "pool.csv.gz", "rt")))
+    # RMCF (routine Geygan) is too illiquid to be shown; Draughn's CTBI buys are.
+    types = {(r["ticker"], r["insider_type"]) for r in rows}
+    assert types == {("CTBI", "opportunistic"), ("CTBI", ""), ("PLCE", "")}
+    report = (out / "report.md").read_text()
+    assert "## Routine vs opportunistic insiders" in report and "## Variants" in report
+    m = M.Model.from_json((out / "model.json").read_text())
+    assert "insider type" in m.weights
+    capsys.readouterr()
+    assert cli.main(["rank", *args, "--model", str(out / "model.json"),
+                     "--as-of", "2024-02-16"]) == 0
+    assert " 1. CTBI" in capsys.readouterr().out
+    path = Path(__file__).parents[1] / "scripts" / "crosscheck_scoring.py"
+    spec = importlib.util.spec_from_file_location("crosscheck_scoring", path)
+    xc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(xc)
+    assert xc.run_checks(out, REAL / "backtest_bars", os.environ["TT_TEST_DATABASE_URL"],
+                         insiders=hist) == []

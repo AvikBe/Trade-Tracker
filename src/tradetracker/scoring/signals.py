@@ -17,6 +17,9 @@ what scoring needs beyond them, each from data public before the event's entry:
   last close before entry. None without a share count.
 - `beta` and `vol`: against SPY and annualized, from daily closes over the 250 sessions
   before entry (at least 60). They size and hedge positions; they aren't in Q.
+- `insider_type`: "routine" or "opportunistic" (Cohen, Malloy and Pomorski 2012), from
+  the insider's trading in the three calendar years before this one, as filed by 1
+  January (see `tradetracker.insiders`). None when unclassified.
 - `dollar_volume` and `drift` are the backtest's own (median over the 20 sessions
   before entry, and trade date to last close before entry).
 """
@@ -53,6 +56,7 @@ class Signals:
     market_cap: float | None = None
     beta: float | None = None    # vs SPY, daily returns over the 250 sessions before entry
     vol: float | None = None     # annualized, same window
+    insider_type: str | None = None
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)
@@ -126,8 +130,12 @@ class _History:
         return self.values.get(key, [])[: bisect.bisect_left(ds, d)]
 
 
-def build(results: list[Result], prices, h: int = PRIMARY_H, shares=None) -> list[Signals]:
+def build(results: list[Result], prices, h: int = PRIMARY_H, shares=None,
+          insiders=None, filer_keys: dict[int, str] | None = None) -> list[Signals]:
     """Signals for every result, aligned with `results`.
+
+    `insiders` (an `insiders.Classifier`) and `filer_keys` (filer_id -> owner CIK) fill
+    `insider_type`.
 
     `results` must hold every event the history features should see (all buys, not just
     the ones being scored): a repeat buy or a track record counts earlier events whatever
@@ -168,5 +176,7 @@ def build(results: list[Result], prices, h: int = PRIMARY_H, shares=None) -> lis
                         if o.entry else None),
             beta=beta,
             vol=vol,
+            insider_type=(insiders.kind(filer_keys.get(e.filer_id), e.filing_date)
+                          if insiders is not None and filer_keys else None),
         ))
     return out

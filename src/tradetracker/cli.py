@@ -41,22 +41,44 @@ def _quarters(spec: str) -> list[tuple[int, int]]:
     return out
 
 
+def _quarter_zips(spec: str, settings) -> list[Path]:
+    """The SEC data set ZIPs for a quarter range, downloaded to DATA_DIR when missing."""
+    paths = []
+    client = EdgarClient(settings.require_edgar())
+    DATA_DIR.mkdir(exist_ok=True)
+    links: dict[tuple[int, int], str] | None = None
+    for y, q in _quarters(spec):
+        dest = DATA_DIR / f"{y}q{q}_form345.zip"
+        if not dest.exists():
+            if links is None:
+                links = bulk.index_links(client.get(bulk.INDEX_URL).text)
+            url = links.get((y, q)) or bulk.quarter_url(y, q)
+            log.info("downloading %s", url)
+            dest.write_bytes(client.get(url).content)
+        paths.append(dest)
+    client.close()
+    return paths
+
+
+def cmd_insider_history(args, settings):
+    from . import insiders
+
+    paths = [Path(p) for p in args.file or []]
+    if args.quarters:
+        paths += _quarter_zips(args.quarters, settings)
+    rows = []
+    for path in paths:
+        n = len(rows)
+        rows += insiders.history_rows(bulk.parse_quarter(path))
+        print(f"{path.name}: {len(rows) - n} trade lines")
+    insiders.write_history(rows, Path(args.out))
+    print(f"wrote {len(rows)} rows to {args.out}")
+
+
 def cmd_load_bulk(args, settings):
     paths: list[Path] = [Path(p) for p in args.file or []]
     if args.quarters:
-        client = EdgarClient(settings.require_edgar())
-        DATA_DIR.mkdir(exist_ok=True)
-        links: dict[tuple[int, int], str] | None = None
-        for y, q in _quarters(args.quarters):
-            dest = DATA_DIR / f"{y}q{q}_form345.zip"
-            if not dest.exists():
-                if links is None:
-                    links = bulk.index_links(client.get(bulk.INDEX_URL).text)
-                url = links.get((y, q)) or bulk.quarter_url(y, q)
-                log.info("downloading %s", url)
-                dest.write_bytes(client.get(url).content)
-            paths.append(dest)
-        client.close()
+        paths += _quarter_zips(args.quarters, settings)
 
     with db.connect(settings.database_url) as conn:
         for path in paths:
@@ -251,11 +273,16 @@ def _scoring_inputs(args, conn):
     evs = [e for e in evs if e.side == "buy"]
     sic = sectors.load_sic(Path(args.sic)) if args.sic else {}
     results = bt_study.run_study(evs, source, sic)
-    shares = None
+    shares = classifier = keys = None
     if getattr(args, "shares", None):
         from .fundamentals import SharesTable
         shares = SharesTable.load(Path(args.shares))
-    return source, results, signals.build(results, source, shares=shares), shares
+    if getattr(args, "insiders", None):
+        from .insiders import Classifier
+        classifier = Classifier.load(Path(args.insiders))
+        keys = dict(conn.execute("SELECT filer_id, source_key FROM filers").fetchall())
+    sigs = signals.build(results, source, shares=shares, insiders=classifier, filer_keys=keys)
+    return source, results, sigs, shares
 
 
 def cmd_score_backtest(args, settings):
@@ -268,10 +295,12 @@ def cmd_score_backtest(args, settings):
     study.add_beta_legs(results, sigs)
     cfg = study.Config(args.name, h=args.horizon, bench=args.bench,
                        min_cap=args.min_cap * 1e6 if args.min_cap else None,
-                       vol_target=args.vol_target)
+                       vol_target=args.vol_target, only_type=args.only_type,
+                       components=study.WITH_TYPE if args.insider_component else None)
     variants = None
     if args.variants:
-        variants, sums = study.variants_table(results, sigs, source)
+        configs = study.CMP_VARIANTS if args.variants == "insider" else study.VARIANTS
+        variants, sums = study.variants_table(results, sigs, source, configs)
         (out / "variants.json").write_text(json.dumps(sums, indent=2))
     write_score_run(out, source, results, sigs, cfg, not args.no_ablation, variants)
     print(f"{len(results)} buy events; wrote {out / 'report.md'} and {out / 'model.json'}")
@@ -334,6 +363,14 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--quarters", help="e.g. 2015q1:2026q2")
     b.add_argument("--file", action="append", help="a local *_form345.zip")
     b.set_defaults(fn=cmd_load_bulk)
+
+    ih = sub.add_parser("insider-history",
+                        help="open-market trades per insider from SEC data sets (routine "
+                             "vs opportunistic)")
+    ih.add_argument("--quarters", help="e.g. 2012q1:2026q2")
+    ih.add_argument("--file", action="append", help="a local *_form345.zip")
+    ih.add_argument("--out", required=True, help="CSV (.csv.gz) to write")
+    ih.set_defaults(fn=cmd_insider_history)
 
     f = sub.add_parser("poll-edgar", help="ingest new Form 4s from the live feed")
     f.add_argument("--pages", type=int, default=1, help="100 entries per page")
@@ -406,7 +443,14 @@ def main(argv: list[str] | None = None) -> int:
                     help="benchmark; beta = stock minus beta x SPY")
     sb.add_argument("--min-cap", type=float, help="hide market caps below this, $M (needs --shares)")
     sb.add_argument("--vol-target", type=float, help="size positions to this annual volatility")
-    sb.add_argument("--variants", action="store_true", help="also compare the five setups")
+    sb.add_argument("--variants", choices=("cap", "insider"),
+                    help="also compare five setups: cap floor / hold / vol control, or "
+                         "routine vs opportunistic insiders")
+    sb.add_argument("--insiders", help="trade history CSV from insider-history")
+    sb.add_argument("--only-type", choices=("opportunistic", "routine"),
+                    help="show only this insider type (needs --insiders)")
+    sb.add_argument("--insider-component", action="store_true",
+                    help="add insider type to Q (needs --insiders)")
     sb.set_defaults(fn=cmd_score_backtest)
 
     rk = sub.add_parser("rank", help="top buys filed recently, scored with a fitted model")
@@ -417,6 +461,7 @@ def main(argv: list[str] | None = None) -> int:
     rk.add_argument("--top", type=int, default=20)
     rk.add_argument("--shares", help="share counts CSV from fetch-shares (market-cap floor)")
     rk.add_argument("--min-cap", type=float, default=50, help="$M floor when --shares is given")
+    rk.add_argument("--insiders", help="trade history CSV from insider-history (reason lines)")
     rk.set_defaults(fn=cmd_rank)
 
     args = p.parse_args(argv)

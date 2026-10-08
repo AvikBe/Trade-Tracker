@@ -20,6 +20,9 @@ Checks:
    clip(beta, 0, 3) x SPY per position) and volatility-scaled sizing.
 8. With --shares: market cap (latest share count dated 100+ days before entry x the last
    raw close before entry, split-adjusted), and beta and volatility, from the raw bars.
+9. With --insiders and --db: routine vs opportunistic insiders, reclassified with pandas
+   from the trade history (Cohen, Malloy and Pomorski: trades in each of the three
+   previous calendar years, filed by 1 January; routine if one month repeats in all three).
 """
 
 from __future__ import annotations
@@ -216,6 +219,35 @@ def check_cap_and_risk(pool: pd.DataFrame, shares_csv: Path, root: Path, sample:
     return report("market cap, beta and volatility (raw bars, share counts)", bad, 3 * len(rows))
 
 
+def check_insider_type(pool: pd.DataFrame, history: Path, db: str) -> list[str]:
+    import psycopg
+
+    h = pd.read_csv(history, dtype={"owner_cik": str}, parse_dates=["trade_date", "filed"])
+    h["owner_cik"] = h.owner_cik.str.lstrip("0")
+    h["ty"], h["tm"] = h.trade_date.dt.year, h.trade_date.dt.month
+    with psycopg.connect(db) as c:
+        keys = dict(c.execute("SELECT filer_id, source_key FROM filers").fetchall())
+    by_owner = {k: g for k, g in h.groupby("owner_cik")}
+    memo, bad = {}, []
+    for r in pool.itertuples():
+        owner = str(keys.get(r.filer_id, "")).lstrip("0")
+        year = r.filing_date.year
+        if (owner, year) not in memo:
+            g = by_owner.get(owner)
+            want = None
+            if g is not None:
+                g = g[(g.filed < pd.Timestamp(year, 1, 1)) & g.ty.between(year - 3, year - 1)]
+                months = [set(g[g.ty == y].tm) for y in (year - 3, year - 2, year - 1)]
+                if all(months):
+                    want = "routine" if months[0] & months[1] & months[2] else "opportunistic"
+            memo[(owner, year)] = want
+        want = memo[(owner, year)]
+        got = r.insider_type if isinstance(r.insider_type, str) and r.insider_type else None
+        if want != got:
+            bad.append(f"{r.ticker} {r.filing_date.date()} filer {r.filer_id}: {got} vs {want}")
+    return report("insider type (pandas, trade history)", bad, len(pool))
+
+
 # ---------------------------------------------------------------- 5-6: model
 
 def edges(x, cuts, labels, missing):
@@ -242,6 +274,8 @@ def buckets(r) -> dict:
                           ["<=-45%", "-45 to -25%", "-25 to -10%", "within 10%"], "unknown"),
         "track": edges(None if nan(r["track_record"]) else r["track_record"], [-0.05, 0, 0.05],
                        ["< -5%", "-5 to 0%", "0 to 5%", ">= 5%"], "none yet"),
+        "insider type": r["insider_type"] if isinstance(r.get("insider_type"), str)
+        and r["insider_type"] else "unclassified",
         "liquidity": edges(None if nan(r["dollar_volume"]) else r["dollar_volume"],
                            [1e6, 5e6, 50e6],
                            ["<$1M/day", "$1-5M/day", "$5-50M/day", ">=$50M/day"], "<$1M/day"),
@@ -381,7 +415,8 @@ def check_metrics(scored: pd.DataFrame, summary: dict, root: Path) -> list[str]:
 
 
 def run_checks(run: Path, root: Path, db: str | None, sample: int = 0,
-               seed: int = 1, shares: Path | None = None) -> list[str]:
+               seed: int = 1, shares: Path | None = None,
+               insiders: Path | None = None) -> list[str]:
     """Signals are checked on the whole shown pool (every year); the model on test years."""
     scored, pool, ev, models, summary = load(run)
     bad = []
@@ -391,6 +426,8 @@ def run_checks(run: Path, root: Path, db: str | None, sample: int = 0,
     bad += check_drawdown(pool, root, sample, seed)
     if shares:
         bad += check_cap_and_risk(pool, shares, root, sample, seed)
+    if insiders and db:
+        bad += check_insider_type(pool, insiders, db)
     if models:
         bad += check_scores(scored, models)
         bad += check_refit(pool, models)
@@ -406,9 +443,11 @@ def main() -> int:
     p.add_argument("--sample", type=int, default=5000, help="drawdown sample; 0 checks all")
     p.add_argument("--seed", type=int, default=1)
     p.add_argument("--shares", help="share counts CSV, to check market caps")
+    p.add_argument("--insiders", help="trade history CSV, to check insider types (needs --db)")
     a = p.parse_args()
     bad = run_checks(Path(a.run), Path(a.prices), a.db, a.sample, a.seed,
-                     Path(a.shares) if a.shares else None)
+                     Path(a.shares) if a.shares else None,
+                     Path(a.insiders) if a.insiders else None)
     print(f"total mismatches: {len(bad)}")
     return 1 if bad else 0
 

@@ -21,3 +21,9 @@ Market-cap tests (`tests/test_capvol.py`):
 - `shares_outstanding.csv`: the `dei:EntityCommonStockSharesOutstanding` facts for PLCE,
   CTBI, RMCF and NBIX dated Oct 2022 to May 2024, cut unchanged from the SEC XBRL frames
   that `tt fetch-shares` downloads (`CY2022Q4I` to `CY2024Q1I`).
+
+Insider-type tests (`tests/test_insiders.py`, `tests/test_scoring_real.py`):
+
+- `insider_history.csv.gz`: every open-market trade line traded 2020-2023 by the
+  reporting owners in `2024q1_features_form345.zip`, cut unchanged from the output of
+  `tt insider-history --quarters 2012q1:2026q2` (the SEC data sets).
