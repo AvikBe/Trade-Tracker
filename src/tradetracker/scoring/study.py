@@ -76,6 +76,8 @@ class Config:
             parts.append(f"{self.only_type} insiders only")
         if self.components and "insider type" in self.components:
             parts.append("insider type in Q")
+        if self.components == TWO_INPUTS:
+            parts.append("drawdown and run-up only")
         return ", ".join(parts)
 
     def comps(self) -> list[str]:
@@ -103,6 +105,19 @@ CMP_VARIANTS = [
     Config("opportunistic only, 60 days", h=60, only_type="opportunistic"),
     Config("routine only (control)", only_type="routine"),
 ]
+# avik, 2026-10-12: "focus on the edges that are apparent". Q is the 52-week drawdown
+# alone, times the fitted run-up penalty. Both were picked after seeing 2017-2026, so
+# these rows are not a clean out-of-sample test of the choice (see `rule_table`).
+TWO_INPUTS = ("drawdown",)
+TWO_INPUT_VARIANTS = [PHASE4] + [
+    Config(f"two inputs, {h} days" + (", cap floor" if cap else "")
+           + (", beta hedge" if hedge else ""),
+           h=h, bench="beta" if hedge else "spy", min_cap=50e6 if cap else None,
+           components=TWO_INPUTS)
+    for cap in (False, True) for hedge in (False, True) for h in (20, 60)
+]
+RULE_DRAWDOWN = -0.25      # the fixed rule: at least 25% below the 52-week high ...
+RULE_DRIFT = 0.0           # ... and no rise between the trade and entry
 
 
 def hedge_beta(s: Signals) -> float:
@@ -469,7 +484,7 @@ def ablation(results, signals, base_top, cfg: Config = PHASE4) -> str:
     b = _summ(base_top, cfg.h, cfg.bench)
     rows.append(["all components", b.n, pct(b.mean), num(b.t_cluster)])
     variants = [(f"without {c}", [n for n in cfg.comps() if n != c], None)
-                for c in cfg.comps()]
+                for c in cfg.comps() if len(cfg.comps()) > 1]
     variants.append(("no drift penalty (beta 0)", None, 0.0))
     for label, comps, beta in variants:
         folds = walk_forward(results, signals, components=comps, beta=beta, cfg=cfg)
@@ -501,6 +516,38 @@ def type_table(results, signals, cfg: Config = PHASE4) -> str:
                      pct(hit_rate(g, cfg.h, cfg.bench), 1)] + by_year)
     return table(["insider type", "n", f"net mean, {cfg.h} days", "t (clustered)",
                   "hit rate"] + [str(y) for y in years], rows)
+
+
+def rule_table(results, signals, cfg: Config = PHASE4) -> str:
+    """A fixed rule with nothing fitted: shown buys at least 25% below the 52-week high
+    with no rise since the trade, against all shown buys, year by year. Its edges are
+    round numbers, not tuned, so its stability is a check on the fitted rows."""
+    rows_all: dict[int, list[Scored]] = defaultdict(list)
+    rows_rule: dict[int, list[Scored]] = defaultdict(list)
+    for x, s in zip(results, signals):
+        if not shown(x, s, cfg):
+            continue
+        sc = Scored(x, s, 0.0, 0.0, x.outcome.entry.year, False)
+        rows_all[sc.year].append(sc)
+        if (s.drawdown is not None and s.drawdown <= RULE_DRAWDOWN
+                and s.drift is not None and s.drift <= RULE_DRIFT):
+            rows_rule[sc.year].append(sc)
+    rows = []
+    for y in sorted(rows_all):
+        a, r = _summ(rows_all[y], cfg.h, cfg.bench), _summ(rows_rule[y], cfg.h, cfg.bench)
+        rows.append([y, a.n, pct(a.mean), r.n, pct(r.mean),
+                     pct(None if r.mean is None or a.mean is None else r.mean - a.mean),
+                     pct(hit_rate(rows_rule[y], cfg.h, cfg.bench), 1)])
+    for label, lo, hi in [("2015-2016 (before any test year)", 2015, 2016)] + PERIODS + [
+            ("all years", 0, 9999)]:
+        aa = [x for y, v in rows_all.items() if lo <= y <= hi for x in v]
+        rr = [x for y, v in rows_rule.items() if lo <= y <= hi for x in v]
+        a, r = _summ(aa, cfg.h, cfg.bench), _summ(rr, cfg.h, cfg.bench)
+        rows.append([f"**{label}**", a.n, pct(a.mean), r.n, pct(r.mean),
+                     pct(None if r.mean is None or a.mean is None else r.mean - a.mean),
+                     pct(hit_rate(rr, cfg.h, cfg.bench), 1) + f" (t {num(r.t_cluster)})"])
+    return table(["year", "shown", "all, net", "rule", "rule, net", "rule minus all",
+                  "rule hit rate"], rows)
 
 
 def run_config(results, signals, prices, cfg: Config) -> tuple[list[Fold], dict, Portfolio]:
@@ -571,6 +618,12 @@ def render(results: list[Result], signals: list[Signals], prices, final: M.Model
                   "previous three calendar years is routine if one calendar month had a "
                   "trade in all three, else opportunistic. Returns are "
                   f"{h}-day {what} after costs.", "", type_table(results, signals, cfg), ""]
+    if cfg.components == TWO_INPUTS:
+        lines += ["## Fixed rule, nothing fitted", "",
+                  "Shown buys at least 25% below the 52-week high whose price hasn't risen "
+                  "since the trade, against all shown buys. The edges are round numbers "
+                  "chosen before this run, so nothing here is fitted; 2015-2016 are years "
+                  "no fold was tested on.", "", rule_table(results, signals, cfg), ""]
     lines += [
         "## By test year",
         "",

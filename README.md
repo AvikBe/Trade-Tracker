@@ -213,6 +213,14 @@ January) is routine if one calendar month had a trade in all three, else opportu
 `--insider-component` adds the type to Q, `--only-type opportunistic` shows only those
 buys, and `--variants insider` compares five such setups (with a routine-only control).
 
+### Two-input score
+
+`--two-inputs` strips Q down to the 52-week drawdown alone (the fitted run-up penalty
+stays), the two inputs that carried the edge in phases 4 to 4c. `--variants two` runs
+it at 20 and 60 days, with and without the $50M cap floor and the beta hedge, and the
+report adds a fixed rule with nothing fitted (25%+ below the high, no rise since the
+trade) year by year, as a check on how much of the result comes from fitting.
+
 ## Tests
 
 ```sh
