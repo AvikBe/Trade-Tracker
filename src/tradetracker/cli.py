@@ -296,10 +296,12 @@ def cmd_score_backtest(args, settings):
     cfg = study.Config(args.name, h=args.horizon, bench=args.bench,
                        min_cap=args.min_cap * 1e6 if args.min_cap else None,
                        vol_target=args.vol_target, only_type=args.only_type,
-                       components=study.WITH_TYPE if args.insider_component else None)
+                       components=(study.WITH_TYPE if args.insider_component else
+                                   study.TWO_INPUTS if args.two_inputs else None))
     variants = None
     if args.variants:
-        configs = study.CMP_VARIANTS if args.variants == "insider" else study.VARIANTS
+        configs = {"insider": study.CMP_VARIANTS, "two": study.TWO_INPUT_VARIANTS,
+                   "cap": study.VARIANTS}[args.variants]
         variants, sums = study.variants_table(results, sigs, source, configs)
         (out / "variants.json").write_text(json.dumps(sums, indent=2))
     write_score_run(out, source, results, sigs, cfg, not args.no_ablation, variants)
@@ -443,9 +445,11 @@ def main(argv: list[str] | None = None) -> int:
                     help="benchmark; beta = stock minus beta x SPY")
     sb.add_argument("--min-cap", type=float, help="hide market caps below this, $M (needs --shares)")
     sb.add_argument("--vol-target", type=float, help="size positions to this annual volatility")
-    sb.add_argument("--variants", choices=("cap", "insider"),
-                    help="also compare five setups: cap floor / hold / vol control, or "
-                         "routine vs opportunistic insiders")
+    sb.add_argument("--variants", choices=("cap", "insider", "two"),
+                    help="also compare setups: cap floor / hold / vol control, routine vs "
+                         "opportunistic insiders, or the two-input score")
+    sb.add_argument("--two-inputs", action="store_true",
+                    help="Q is the 52-week drawdown alone (with the fitted run-up penalty)")
     sb.add_argument("--insiders", help="trade history CSV from insider-history")
     sb.add_argument("--only-type", choices=("opportunistic", "routine"),
                     help="show only this insider type (needs --insiders)")

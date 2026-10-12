@@ -245,3 +245,28 @@ def test_cli_insider_run_and_its_cross_check(scored, tmp_path, monkeypatch, caps
     spec.loader.exec_module(xc)
     assert xc.run_checks(out, REAL / "backtest_bars", os.environ["TT_TEST_DATABASE_URL"],
                          insiders=hist) == []
+
+
+def test_cli_two_input_run_and_its_cross_check(scored, tmp_path, monkeypatch):
+    import importlib.util
+    import os
+
+    pytest.importorskip("pandas")
+    pytest.importorskip("scipy")
+    from tradetracker import cli
+
+    monkeypatch.setenv("DATABASE_URL", os.environ["TT_TEST_DATABASE_URL"])
+    out = tmp_path / "run"
+    assert cli.main(["score-backtest", "--prices", str(REAL / "backtest_bars"), "--sic",
+                     str(REAL / "backtest_sic.csv"), "--out", str(out), "--two-inputs",
+                     "--horizon", "60", "--variants", "two", "--name", "two inputs"]) == 0
+    m = M.Model.from_json((out / "model.json").read_text())
+    assert set(m.weights) == {"drawdown"}
+    report = (out / "report.md").read_text()
+    assert "## Fixed rule, nothing fitted" in report and "drawdown and run-up only" in report
+    assert "without drawdown" not in report
+    path = Path(__file__).parents[1] / "scripts" / "crosscheck_scoring.py"
+    spec = importlib.util.spec_from_file_location("crosscheck_scoring", path)
+    xc = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(xc)
+    assert xc.run_checks(out, REAL / "backtest_bars", os.environ["TT_TEST_DATABASE_URL"]) == []
