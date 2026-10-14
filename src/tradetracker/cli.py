@@ -349,6 +349,23 @@ def cmd_rank(args, settings):
               f"{e.filing_date}: {r.reason}; round trip {rank.cost_note(r)}")
 
 
+def cmd_paper_trade(args, settings):
+    from .paper import run as paper_run
+
+    res = paper_run.run(Path(args.state), Path(args.model), args.broker,
+                        settings.require_edgar(),
+                        today=date.fromisoformat(args.today) if args.today else None,
+                        shares_seed=Path(args.shares) if args.shares else None,
+                        filings_cache=Path(args.filings) if args.filings else None)
+    print(f"session {res.session or 'none (market closed)'}")
+    for line in res.ingested + res.notes:
+        print(f"  {line}")
+    print(f"  candidates: {', '.join(d.ticker for d in res.candidates) or 'none'}")
+    for o in res.submitted:
+        print(f"  order: {o['side']} {o['qty']} {o['ticker']} ({o['tif']}): {o['status']} {o['note'] or ''}")
+    print(f"report: {Path(args.state) / 'report.md'}")
+
+
 def cmd_report(args, settings):
     with db.connect(settings.database_url) as conn:
         print(report.render(conn))
@@ -467,6 +484,17 @@ def main(argv: list[str] | None = None) -> int:
     rk.add_argument("--min-cap", type=float, default=50, help="$M floor when --shares is given")
     rk.add_argument("--insiders", help="trade history CSV from insider-history (reason lines)")
     rk.set_defaults(fn=cmd_rank)
+
+    pt = sub.add_parser("paper-trade",
+                        help="one morning's paper-trading run: new filings, score, orders")
+    pt.add_argument("--state", required=True, help="the book's directory (state, logs, report)")
+    pt.add_argument("--model", required=True, help="model.json from score-backtest")
+    pt.add_argument("--broker", choices=["dry-run", "alpaca"], default="dry-run",
+                    help="dry-run logs orders and simulates fills; alpaca uses the paper API")
+    pt.add_argument("--shares", help="share-count CSV to seed the book's copy (fetch-shares)")
+    pt.add_argument("--filings", help="directory for the per-day filings cache (shared by books)")
+    pt.add_argument("--today", help="run as of this date (YYYY-MM-DD), for replays and tests")
+    pt.set_defaults(fn=cmd_paper_trade)
 
     args = p.parse_args(argv)
     try:
