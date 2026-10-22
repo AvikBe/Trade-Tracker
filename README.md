@@ -221,6 +221,59 @@ it at 20 and 60 days, with and without the $50M cap floor and the beta hedge, an
 report adds a fixed rule with nothing fitted (25%+ below the high, no rise since the
 trade) year by year, as a check on how much of the result comes from fitting.
 
+## Paper trading (milestone 5)
+
+`tt paper-trade` runs the best setup so far on new filings, once a morning before the
+open: the two-input score (52-week drawdown and the run-up penalty), 60-session holds,
+the $50M market-cap floor, buys only. It never touches real money: the Alpaca broker
+only talks to `https://paper-api.alpaca.markets` and refuses any other address.
+
+```sh
+tt paper-trade --state DIR --model models/two-inputs-60-days-cap-floor.json \
+    --shares shares.csv --filings DIR/filings [--broker dry-run|alpaca] [--today DATE]
+scripts/paper-daily.sh       # what the routine runs: the dry-run book, plus Alpaca when keys are set
+```
+
+Each run:
+
+1. **Reconciles** earlier orders with the broker. A filled buy opens a position; a buy
+   that died frees its slot; a sell that died is tried again at the next open.
+2. **Reads EDGAR's daily form index** for every business day since the last run, and
+   each Form 4's full submission text (acceptance time and ownership XML in one request).
+   A day is cached as JSON in `--filings`, so books share it and reruns are free.
+3. **Scores each buy as the backtest did at entry**, with the backtest's own functions
+   on bars that end before today's open: drift since the trade, 52-week drawdown, median
+   dollar volume, the Form 4 price check, market cap. Hidden: 10b5-1 plans, under $2 or
+   $100k a day, drift above 20%, cap under $50M or unknown. A buy at or above the model's
+   cutoff (score 1.0: 45%+ below the 52-week high and no rise since the trade) is a
+   candidate; one per stock.
+4. **Sells** positions on their 60th session at the close (a closing-auction order), and
+   **buys** candidates at today's open (opening-auction orders, falling back to day
+   orders if Alpaca refuses), best score first, into 20 slots of 1/20 of equity each,
+   never the same stock twice. This is the backtest's top-20 portfolio rule.
+5. Writes `state.json`, `decisions.csv` (every buy seen and why it was or wasn't
+   bought), `orders.csv`, `runs.log` and `report.md` in `--state`.
+
+Brokers: `dry-run` places nothing; it logs orders and fills them from Yahoo bars (at
+the session's open or close, with the backtest's cost estimate charged on top), so it
+is a shadow book. `alpaca` uses a free Alpaca paper account. Its keys come from
+`ALPACA_API_KEY` and `ALPACA_SECRET_KEY`, or, in a cloud session, from two network
+secrets on host `paper-api.alpaca.markets` (headers `APCA-API-KEY-ID` and
+`APCA-API-SECRET-KEY`, no prefix) that the agent proxy adds to each request.
+`tt alpaca-check` says whether the account is reachable; the daily script runs the
+Alpaca book only when it is. Prices for scoring come from Yahoo, the backtest's own source, so
+the shared Tiingo budget is untouched.
+
+Differences from the backtest, by design: the $2 floor uses the last close (the entry
+open isn't known before the open); a buy found late (a missed run) is still bought up
+to 5 sessions late and is flagged; a day's index that isn't out yet is read next run.
+
+Checks: `scripts/crosscheck_paper.py` rescores every 2017-2026 backtest buy with the
+paper code and compares every input; `scripts/replay_paper.py` replays the book day by
+day over past years and compares its positions and returns with the backtest's
+portfolio; `scripts/crosscheck_ingest.py` compares the EDGAR ingest with the SEC's
+quarterly data sets.
+
 ## Tests
 
 ```sh
