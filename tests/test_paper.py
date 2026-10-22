@@ -338,8 +338,8 @@ def alpaca(handler):
 def test_alpaca_refuses_live_urls_and_missing_keys(monkeypatch):
     with pytest.raises(B.BrokerError, match="only Alpaca's paper API"):
         B.AlpacaPaper("k", "s", base_url="https://api.alpaca.markets")
-    with pytest.raises(B.BrokerError, match="keys are missing"):
-        B.AlpacaPaper("", "")
+    with pytest.raises(B.BrokerError, match="incomplete"):
+        B.AlpacaPaper("k", "")
     monkeypatch.setenv("APCA_API_BASE_URL", "https://api.alpaca.markets")
     monkeypatch.setenv("ALPACA_API_KEY", "k")
     monkeypatch.setenv("ALPACA_SECRET_KEY", "s")
@@ -347,6 +347,44 @@ def test_alpaca_refuses_live_urls_and_missing_keys(monkeypatch):
         B.AlpacaPaper.from_env()
     monkeypatch.setenv("APCA_API_BASE_URL", "https://paper-api.alpaca.markets/")
     assert B.AlpacaPaper.from_env().kind == "alpaca"
+
+
+def test_alpaca_without_keys_leaves_auth_to_the_proxy(monkeypatch):
+    # Network secrets: no keys in the session, the agent proxy adds the headers.
+    for v in ("ALPACA_API_KEY", "ALPACA_SECRET_KEY", "APCA_API_KEY_ID", "APCA_API_SECRET_KEY",
+              "APCA_API_BASE_URL"):
+        monkeypatch.delenv(v, raising=False)
+    seen = []
+
+    def handler(req):
+        seen.append(req)
+        return httpx.Response(200, json={"account_number": "PA1", "status": "ACTIVE", "equity": "100000"})
+    a = B.AlpacaPaper.from_env()
+    a.http = httpx.Client(base_url=B.PAPER_URL, transport=httpx.MockTransport(handler))
+    assert a.proxy_auth
+    ok, why = a.ready()
+    assert ok and "PA1" in why
+    assert "apca-api-key-id" not in seen[0].headers and "apca-api-secret-key" not in seen[0].headers
+    keyed = alpaca(handler)
+    keyed.ready()
+    assert seen[1].headers["apca-api-key-id"] == "k" and seen[1].headers["apca-api-secret-key"] == "s"
+
+
+def test_alpaca_ready_reports_missing_auth():
+    a = alpaca(lambda req: httpx.Response(401, json={"message": "unauthorized."}))
+    ok, why = a.ready()
+    assert not ok and "401" in why
+    with pytest.raises(B.BrokerError):
+        alpaca(lambda req: httpx.Response(404, text="nope")).ready()
+
+
+def test_cli_alpaca_check_exit_codes(monkeypatch, capsys):
+    from tradetracker import cli
+    monkeypatch.setattr(B.AlpacaPaper, "ready", lambda self: (False, "not authorized (HTTP 401)"))
+    assert cli.main(["alpaca-check"]) == 3
+    assert "not ready" in capsys.readouterr().out
+    monkeypatch.setattr(B.AlpacaPaper, "ready", lambda self: (True, "account PA1 ACTIVE"))
+    assert cli.main(["alpaca-check"]) == 0
 
 
 def order_json(cid, status="accepted", tif="opg", **kw):

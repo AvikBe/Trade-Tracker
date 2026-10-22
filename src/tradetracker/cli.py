@@ -366,6 +366,14 @@ def cmd_paper_trade(args, settings):
     print(f"report: {Path(args.state) / 'report.md'}")
 
 
+def cmd_alpaca_check(args, settings):
+    from .paper.broker import AlpacaPaper
+
+    ok, why = AlpacaPaper.from_env().ready()
+    print(f"alpaca paper: {'ready' if ok else 'not ready'}: {why}")
+    return 0 if ok else 3
+
+
 def cmd_report(args, settings):
     with db.connect(settings.database_url) as conn:
         print(report.render(conn))
@@ -496,13 +504,17 @@ def main(argv: list[str] | None = None) -> int:
     pt.add_argument("--today", help="run as of this date (YYYY-MM-DD), for replays and tests")
     pt.set_defaults(fn=cmd_paper_trade)
 
+    ac = sub.add_parser("alpaca-check",
+                        help="can the paper book reach Alpaca's paper account? exit 0 if so, 3 if not")
+    ac.set_defaults(fn=cmd_alpaca_check)
+
     args = p.parse_args(argv)
     try:
-        args.fn(args, config.load())
+        rc = args.fn(args, config.load())
     except config.ConfigError as e:
         print(f"config error: {e}", file=sys.stderr)
         return 2
-    return 0
+    return rc or 0
 
 
 if __name__ == "__main__":

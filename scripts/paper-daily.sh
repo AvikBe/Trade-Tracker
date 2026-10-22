@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Daily paper-trading run, before the US open (the routine runs it at 12:30 UTC on
-# weekdays). Always runs the dry-run book; also runs the Alpaca paper book when
-# ALPACA_API_KEY and ALPACA_SECRET_KEY are set. Safe to rerun: each book has a lock and
+# weekdays). Always runs the dry-run book; also runs the Alpaca paper book when it can
+# reach the paper account: keys in ALPACA_API_KEY and ALPACA_SECRET_KEY, or added by the
+# agent proxy from the cloud environment's network secrets (`tt alpaca-check`). Safe to rerun: each book has a lock and
 # client order ids stop duplicate orders. Output is appended to $ROOT/daily.log.
 set -uo pipefail
 ROOT=${TT_PAPER_ROOT:-/mnt/project-files/paper}
@@ -20,7 +21,9 @@ status=0
   python3 -c "import tradetracker.paper.engine" 2>/dev/null \
     || python3 -m pip install -q -e "$REPO" >/dev/null 2>&1
   books="dry-run"
-  if [ -n "${ALPACA_API_KEY:-}" ] && [ -n "${ALPACA_SECRET_KEY:-}" ]; then
+  check=$(tt alpaca-check 2>&1 | grep -v "HTTP Request")
+  echo "$check"
+  if printf '%s' "$check" | grep -q "alpaca paper: ready"; then
     books="dry-run alpaca"
   fi
   for b in $books; do

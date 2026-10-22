@@ -4,7 +4,10 @@ Both take the same requests and report fills the same way, so the paper book doe
 care which one it talks to.
 
 - `AlpacaPaper` talks to https://paper-api.alpaca.markets and nothing else: it refuses
-  any other base URL, so this code can never reach a live (real money) account.
+  any other base URL, so this code can never reach a live (real money) account. Keys
+  come from the environment, or, when none are set, from the cloud environment's
+  network secrets: the agent proxy adds the APCA-API-KEY-ID and APCA-API-SECRET-KEY
+  headers to requests for that host, so the session never sees them.
 - `DryRun` places nothing. It logs each order and fills it from daily bars once they
   exist: an opening order at that session's open, a closing order at its close. That
   matches the backtest's entry (the open) and exit (the close), with no spread.
@@ -52,10 +55,14 @@ class AlpacaPaper:
                  transport: httpx.BaseTransport | None = None):
         if base_url.rstrip("/") != PAPER_URL:
             raise BrokerError(f"refusing {base_url}: only Alpaca's paper API ({PAPER_URL}) is allowed")
-        if not key or not secret:
-            raise BrokerError("Alpaca paper keys are missing (ALPACA_API_KEY, ALPACA_SECRET_KEY)")
+        if bool(key) != bool(secret):
+            raise BrokerError("Alpaca paper keys are incomplete: set both ALPACA_API_KEY and "
+                              "ALPACA_SECRET_KEY, or neither (the proxy's network secrets)")
+        # No keys: the agent proxy adds them on the way out (network secrets).
+        headers = {"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret} if key else {}
+        self.proxy_auth = not key
         self.http = httpx.Client(base_url=PAPER_URL, timeout=30.0, transport=transport,
-                                 headers={"APCA-API-KEY-ID": key, "APCA-API-SECRET-KEY": secret})
+                                 headers=headers)
 
     @classmethod
     def from_env(cls) -> AlpacaPaper:
@@ -79,6 +86,17 @@ class AlpacaPaper:
                 continue
             return r
         raise BrokerError(f"{method} {path}: HTTP {r.status_code} {r.text[:200]}")
+
+    def ready(self) -> tuple[bool, str]:
+        """Can we reach the paper account? (False, why) when the keys are missing or wrong."""
+        r = self._req("GET", "/v2/account")
+        if r.status_code in (401, 403):
+            how = "network secrets" if self.proxy_auth else "ALPACA_API_KEY/ALPACA_SECRET_KEY"
+            return False, f"not authorized (HTTP {r.status_code}); keys via {how}"
+        if r.status_code != 200:
+            raise BrokerError(f"account: HTTP {r.status_code} {r.text[:200]}")
+        a = r.json()
+        return True, f"account {a.get('account_number')} {a.get('status')}, equity {a.get('equity')}"
 
     def account(self) -> dict:
         r = self._req("GET", "/v2/account")
