@@ -256,8 +256,12 @@ Each run:
 
 Brokers: `dry-run` places nothing; it logs orders and fills them from Yahoo bars (at
 the session's open or close, with the backtest's cost estimate charged on top), so it
-is a shadow book. `alpaca` needs `ALPACA_API_KEY` and `ALPACA_SECRET_KEY` from a free
-Alpaca paper account. Prices for scoring come from Yahoo, the backtest's own source, so
+is a shadow book. `alpaca` uses a free Alpaca paper account. Its keys come from
+`ALPACA_API_KEY` and `ALPACA_SECRET_KEY`, or, in a cloud session, from two network
+secrets on host `paper-api.alpaca.markets` (headers `APCA-API-KEY-ID` and
+`APCA-API-SECRET-KEY`, no prefix) that the agent proxy adds to each request.
+`tt alpaca-check` says whether the account is reachable; the daily script runs the
+Alpaca book only when it is. Prices for scoring come from Yahoo, the backtest's own source, so
 the shared Tiingo budget is untouched.
 
 Differences from the backtest, by design: the $2 floor uses the last close (the entry
