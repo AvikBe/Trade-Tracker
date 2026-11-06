@@ -196,6 +196,7 @@ def main() -> int:
         if summ is None:
             continue
         cap = name == "features-cap-floor.csv.gz"
+        purged = 0
         for setup, h in summ["setups"].items():
             if ("cap floor" in setup) != cap:
                 continue
@@ -206,6 +207,7 @@ def main() -> int:
                 start = pd.Timestamp(y, 1, 1) - pd.Timedelta(days=14)
                 n = ((fr[f"exit_{hz}"] < start) & fr[f"net_{hz}"].notna()).sum()
                 got = summ.get("folds", {}).get(setup, {}).get(str(y))
+                purged += got is not None
                 if got is not None and got != n:
                     bad += 1
                     print(f"  purge {setup} {y}: run {got} vs {n}")
@@ -214,7 +216,8 @@ def main() -> int:
                 top = s[s.above == 1].target.dropna()
                 ok = (len(top) == h["above"] and close(top.mean(), h["top_mean"]))
                 bad += not ok
-                print(f"{setup}: above {len(top)} (run {h['above']}), net mean "
+                print(f"{setup}: {purged} fold training sizes recounted so far; "
+                      f"above {len(top)} (run {h['above']}), net mean "
                       f"{100 * top.mean():.4f}% (run {100 * h['top_mean']:.4f}%) {'ok' if ok else 'MISMATCH'}")
     print(f"total mismatches: {bad}")
     return 1 if bad else 0

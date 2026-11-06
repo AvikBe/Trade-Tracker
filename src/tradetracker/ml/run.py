@@ -119,8 +119,9 @@ def _detail(primary, kept, rows_for, summary, prices, placebo_texts) -> list[str
 
     # --- the primary setup in detail
     parts.append(f"## In detail: {primary.name}\n")
-    parts.append("The closest match to what is being paper traded (60-day hold, $50M cap "
-                 "floor).\n")
+    if primary.h == 60 and primary.min_cap:
+        parts.append("The closest match to what is being paper traded (60-day hold, $50M "
+                     "cap floor).\n")
     parts.append("### Go-live criteria\n\n" + pout.criteria_text + "\n")
     parts.append("### By test year\n\n" + pout.year_text + "\n")
     rows = [[f.year, f.n_fit, f.n_valid, f.n_train, " ".join(map(str, f.rounds)), pct(f.cutoff, 3),
