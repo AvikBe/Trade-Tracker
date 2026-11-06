@@ -332,6 +332,31 @@ def write_score_run(out: Path, source, results, sigs, cfg, ablation: bool = True
     bt_study.write_events(results, out / "events.csv.gz")
 
 
+def cmd_ml_study(args, settings):
+    """Gradient-boosted models over every feature, against the two-input score."""
+    import pickle
+
+    from .backtest import events
+    from .backtest import prices as bt_prices
+    from .ml import run as ml_run
+
+    cache = Path(args.cache) if args.cache else None
+    if cache and cache.exists():
+        results, sigs, evs = pickle.loads(cache.read_bytes())
+        source = bt_prices.open_source(args.prices, None)
+    else:
+        with db.connect(settings.database_url) as conn:
+            source, results, sigs, _ = _scoring_inputs(args, conn)
+            evs, _ = events.load_events(conn)
+        if cache:
+            cache.write_bytes(pickle.dumps((results, sigs, evs)))
+    setups = None
+    if args.quick:
+        from .ml import study as ml
+        setups = [ml.PRIMARY, ml.PRIMARY_RANK]
+    ml_run.run(results, sigs, evs, source, Path(args.out), placebos=args.placebos, setups=setups)
+
+
 def cmd_rank(args, settings):
     from .scoring import model, rank
 
@@ -481,6 +506,18 @@ def main(argv: list[str] | None = None) -> int:
     sb.add_argument("--insider-component", action="store_true",
                     help="add insider type to Q (needs --insiders)")
     sb.set_defaults(fn=cmd_score_backtest)
+
+    ml = sub.add_parser("ml-study", help="gradient-boosted models over every per-trade "
+                        "feature, walk-forward, vs the two-input score")
+    ml.add_argument("--prices", required=True, help="a cache directory (Tiingo layout)")
+    ml.add_argument("--sic", help="SIC CSV from fetch-sic (sector benchmarks)")
+    ml.add_argument("--shares", help="share counts CSV from fetch-shares (market cap)")
+    ml.add_argument("--insiders", help="trade history CSV from insider-history")
+    ml.add_argument("--out", required=True, help="directory for report.md and summary.json")
+    ml.add_argument("--cache", help="pickle of the loaded events and signals, reused if present")
+    ml.add_argument("--placebos", type=int, default=20, help="shuffled-label walk-forwards")
+    ml.add_argument("--quick", action="store_true", help="the primary setup only")
+    ml.set_defaults(fn=cmd_ml_study)
 
     rk = sub.add_parser("rank", help="top buys filed recently, scored with a fitted model")
     rk.add_argument("--model", required=True, help="model.json from score-backtest")

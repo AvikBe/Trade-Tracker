@@ -43,6 +43,7 @@ tt rank --model results/model.json --prices DIR [--as-of DATE]  # top 20 recent 
 tt fetch-shares --out shares.csv        # SEC share counts, for the market-cap floor
 tt insider-history --quarters 2012q1:2026q2 --out history.csv.gz   # routine vs opportunistic
 tt score-backtest ... --shares shares.csv --min-cap 50 --horizon 60 --bench beta --vol-target 0.4 --variants cap
+tt ml-study --prices DIR --sic sic.csv --shares shares.csv --insiders history.csv.gz --out results/ml
 ```
 
 `load-prices` spends at most the remaining hourly and daily Tiingo quota per run and
@@ -273,6 +274,35 @@ paper code and compares every input; `scripts/replay_paper.py` replays the book 
 day over past years and compares its positions and returns with the backtest's
 portfolio; `scripts/crosscheck_ingest.py` compares the EDGAR ingest with the SEC's
 quarterly data sets.
+
+## Gradient-boosted models (milestone 4e)
+
+`tt ml-study` asks whether a flexible model over every per-trade feature finds buys the
+hand-built scores missed. It trains LightGBM on 44 point-in-time features
+(`tradetracker/ml/features.py`: the score's signals, the filing, the stock's own price
+history, the market, and other insiders' trades filed on earlier days) and tests it on the
+phase 4 sample with the phase 4 metrics and go-live criteria, against the two-input score
+rerun on the same pool.
+
+- **Walk-forward by year, purged and embargoed.** A fold for year y trains only on buys
+  that exit at least 14 days before 1 January of y. Early stopping uses the last training
+  year as validation, split the same way, and the rounds found there are refitted on
+  the whole training set. Hyperparameters are fixed and conservative (15 leaves, depth 4,
+  300 buys per leaf, subsampling, L2), never tuned on test years. Three seeds averaged.
+- **Two targets.** "net" is the net excess return over SPY (winsorized 1%/99%); "rank" is
+  its percentile within the entry month, so the model can't profit from timing the market.
+- **Eight setups** (20/60 days x cap floor x target), each with shuffled-label placebos
+  (training labels permuted within each year; 20 for the two 60-day cap-floor setups,
+  10 for the rest).
+- **Explanations.** SHAP values (LightGBM `pred_contrib`) on every test buy, pooled over
+  folds: importance, direction, stability by year, quintile tables of SHAP against the
+  realized return, and SHAP interaction values (`shap.TreeExplainer`) with tercile grids.
+- **Ablations** drop or keep one feature group at a time, hedge beta, or drop the embargo.
+
+`--cache pool.pkl` saves the loaded events and signals, so later runs skip the database.
+Set `TT_ML_THREADS` to at most the idle cores: oversubscribed OpenMP threads make LightGBM
+around 100x slower. `scripts/crosscheck_ml.py --run results/ml --prices DIR` rebuilds the
+features with pandas from the raw bars and events and rechecks fold sizes and means.
 
 ## Tests
 
