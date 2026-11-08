@@ -249,8 +249,11 @@ Each run:
    candidate; one per stock.
 4. **Sells** positions on their 60th session at the close (a closing-auction order), and
    **buys** candidates at today's open (opening-auction orders, falling back to day
-   orders if Alpaca refuses), best score first, into 20 slots of 1/20 of equity each,
-   never the same stock twice. This is the backtest's top-20 portfolio rule.
+   orders if Alpaca refuses), best score first, into 40 slots (`--slots`) of 1/40 of equity each,
+   never the same stock twice. This is the backtest's top-N portfolio rule. The book ran
+   20 slots until 2026-11-09; the switch keeps held positions at their size and sizes
+   new buys at 1/40, because PR #11's book-size study put the 40-slot IR at 0.28
+   against 0.09.
 5. Writes `state.json`, `decisions.csv` (every buy seen and why it was or wasn't
    bought), `orders.csv`, `runs.log` and `report.md` in `--state`.
 

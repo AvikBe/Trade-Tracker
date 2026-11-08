@@ -10,8 +10,8 @@ Each run, in order:
    at or above the model's cutoff, one per stock.
 4. Exits: a position bought at session s is sold at the close of session s + h - 1
    (held h sessions, the backtest's exit). A missed exit is sold at the next open.
-5. Entries: the backtest's top-20 portfolio. Up to `slots` positions, each 1/slots of
-   equity, no stock twice, best score first, bought at today's open. A position that
+5. Entries: the backtest's top-N portfolio (40 slots since 2026-11-09, 20 before). Up to
+   `slots` positions, each 1/slots of equity at the time of the buy, no stock twice, best score first, bought at today's open. A position that
    sells today still holds its slot today, as in `scoring.study.simulate`.
 6. Save state and logs, and write `report.md`.
 
@@ -44,7 +44,7 @@ from .signals import Decision, best_per_ticker, evaluate
 log = logging.getLogger(__name__)
 
 STATE_VERSION = 1
-SLOTS = 20
+SLOTS = 40                   # 20 until 2026-11-09; 40 lifts the backtest's portfolio IR from 0.09 to 0.28
 HORIZON = 60
 MIN_CAP = 50e6
 MAX_LATE_SESSIONS = 5        # an entry may come at most this many sessions after plan
@@ -363,6 +363,11 @@ class Book:
             session = today if NYSE.is_business_day(today) else None
             res = RunResult(session)
             self._actions = {}
+            if state.get("slots", 20) != self.cfg.slots:
+                if state["positions"]:
+                    res.notes.append(f"slots changed from {state.get('slots', 20)} to {self.cfg.slots}: "
+                                     f"held positions keep their size, new buys are 1/{self.cfg.slots} of equity")
+            state["slots"] = self.cfg.slots
             self.reconcile(state, today, res)
             if session is not None:
                 events = self.ingest(state, today, res)
