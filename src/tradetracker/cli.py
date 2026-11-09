@@ -406,7 +406,8 @@ def cmd_paper_trade(args, settings):
                         today=date.fromisoformat(args.today) if args.today else None,
                         shares_seed=Path(args.shares) if args.shares else None,
                         filings_cache=Path(args.filings) if args.filings else None,
-                        slots=args.slots)
+                        slots=args.slots,
+                        skill_episodes=Path(args.skill_episodes) if args.skill_episodes else None)
     print(f"session {res.session or 'none (market closed)'}")
     for line in res.ingested + res.notes:
         print(f"  {line}")
@@ -575,6 +576,9 @@ def main(argv: list[str] | None = None) -> int:
     pt.add_argument("--shares", help="share-count CSV to seed the book's copy (fetch-shares)")
     pt.add_argument("--filings", help="directory for the per-day filings cache (shared by books)")
     pt.add_argument("--today", help="run as of this date (YYYY-MM-DD), for replays and tests")
+    pt.add_argument("--skill-episodes",
+                    help="episodes.csv.gz from tt skill-study: buy only insiders with a "
+                    "positive 60-day record (the shadow book)")
     pt.add_argument("--slots", type=int, default=None,
                     help="book size: positions held at once, each 1/slots of equity (default 40)")
     pt.set_defaults(fn=cmd_paper_trade)

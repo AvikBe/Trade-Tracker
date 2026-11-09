@@ -329,6 +329,12 @@ taken as it stood the day before the filing:
   go-live criteria, plus 40-slot book IRs. Each gate is checked against random gates
   that keep the same number of flagged buys each year.
 
+`tt paper-trade ... --skill-episodes results/skill/episodes.csv.gz` runs a shadow book
+with the proven-insider gate (`paper/skill_gate.py`): candidates whose insider has no
+positive 60-day record are logged as `unproven_insider`. Records come from the study's
+episodes plus buys from the book's cached daily filings, priced once their 60 sessions
+are over and saved in `skill-live.csv`; k stays the study's.
+
 `scripts/crosscheck_skill.py --run results/skill --prices DIR --insiders history.csv.gz`
 rebuilds the episodes, k and a sample of records with pandas from the run's event list,
 the history file and the raw bars, and checks the records are point in time.

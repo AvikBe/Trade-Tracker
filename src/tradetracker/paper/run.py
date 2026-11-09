@@ -71,7 +71,8 @@ def make_broker(kind: str, prices):
 
 def run(state_dir: Path, model_path: Path, broker_kind: str, user_agent: str,
         today: date | None = None, shares_seed: Path | None = None,
-        filings_cache: Path | None = None, slots: int | None = None) -> engine.RunResult:
+        filings_cache: Path | None = None, slots: int | None = None,
+        skill_episodes: Path | None = None) -> engine.RunResult:
     if slots is not None and slots < 1:
         raise ValueError(f"slots must be at least 1, got {slots}")
     today = today or engine.eastern_today()
@@ -82,7 +83,13 @@ def run(state_dir: Path, model_path: Path, broker_kind: str, user_agent: str,
     state_dir.mkdir(parents=True, exist_ok=True)
     shares = refresh_shares(edgar, state_dir / "shares-outstanding.csv", shares_seed, today)
     tickers = load_tickers(edgar, state_dir / "company-tickers.json", today)
-    cfg = engine.Config(state_dir=state_dir, model=m, slots=slots or engine.SLOTS)
+    gate = None
+    if skill_episodes is not None:
+        from .skill_gate import SkillGate
+        gate = SkillGate.load(skill_episodes, state_dir, filings_cache or state_dir / "filings",
+                              today, prices, tickers)
+    cfg = engine.Config(state_dir=state_dir, model=m, slots=slots or engine.SLOTS,
+                        skill_gate=gate)
     book = engine.Book(cfg, broker, prices, edgar=edgar, shares=shares, tickers=tickers,
                        filings_cache=filings_cache or state_dir / "filings")
     res = book.run(today)

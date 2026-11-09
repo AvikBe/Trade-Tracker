@@ -68,6 +68,7 @@ class Config:
     min_cap: float | None = MIN_CAP
     start_cash: float = START_CASH
     max_late: int = MAX_LATE_SESSIONS
+    skill_gate: object | None = None      # paper.skill_gate.SkillGate: shadow book only
 
 
 @dataclass
@@ -268,6 +269,12 @@ class Book:
                              self.shares, self.cfg.min_cap)
                 if late > 0:
                     d.flags.append(f"late_entry_{late}")
+                gate = self.cfg.skill_gate
+                if gate is not None and d.status == "candidate":
+                    ok, note = gate.passes(le.filer_cik, le.event.filing_date)
+                    d.flags.append(note)
+                    if not ok:
+                        d.status = "unproven_insider"
             out.append(d)
         res.decisions = out
         return out
