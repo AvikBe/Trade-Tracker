@@ -9,7 +9,7 @@ from .engine import live_positions, mark, spy_return
 
 BACKTEST = ("Backtest, 2017-2026 out of sample (two inputs, 60 days, $50M cap floor): "
             "+5.06% mean 60-day excess over SPY after costs, 51.3% beat SPY, "
-            "top-20 portfolio information ratio 0.09.")
+            "portfolio information ratio 0.09 with 20 slots, 0.28 with 40 (PR #11's book-size study).")
 
 
 def _pct(v) -> str:
@@ -22,11 +22,12 @@ def _money(v) -> str:
 
 def render(state: dict, prices, as_of: date, equity: float | None = None) -> str:
     kind = state["broker"]
+    slots = state.get("slots", 20)
     lines = [f"# Paper book ({'Alpaca paper account' if kind == 'alpaca' else 'dry run: orders logged, fills simulated'})",
              "",
              f"As of the close before {as_of}. Started {state['created'][:10]}. "
              f"Buys open-market insider purchases scoring at or above the model's cutoff, "
-             f"20 slots of 1/20 of equity each, bought at the open after the filing and "
+             f"{slots} slots of 1/{slots} of equity each, bought at the open after the filing and "
              f"sold at the close 60 sessions later.",
              "", BACKTEST, ""]
     closed = [p for p in state["positions"] if p["status"] == "closed"]
@@ -35,7 +36,7 @@ def render(state: dict, prices, as_of: date, equity: float | None = None) -> str
     lines += ["## Summary", "", "| | |", "| --- | --- |"]
     if equity is not None:
         lines.append(f"| Equity | {_money(equity)} (started at {_money(state['start_cash'])}) |")
-    lines.append(f"| Slots in use | {len(live)} of 20 |")
+    lines.append(f"| Slots in use | {len(live)} of {slots} |")
     lines.append(f"| Closed positions | {len(closed)} |")
     if ex:
         hit = sum(1 for v in ex if v > 0) / len(ex)
