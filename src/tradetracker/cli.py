@@ -357,6 +357,30 @@ def cmd_ml_study(args, settings):
     ml_run.run(results, sigs, evs, source, Path(args.out), placebos=args.placebos, setups=setups)
 
 
+def cmd_skill_study(args, settings):
+    """Insider records (beat SPY before?) on top of the two-input score."""
+    import pickle
+
+    from .backtest import prices as bt_prices
+    from .scoring import skill_run
+
+    cache = Path(args.cache) if args.cache else None
+    if cache and cache.exists():
+        results, sigs, keys = pickle.loads(cache.read_bytes())
+        source = bt_prices.open_source(args.prices, None)
+    else:
+        with db.connect(settings.database_url) as conn:
+            source, results, sigs, _ = _scoring_inputs(args, conn)
+            keys = dict(conn.execute("SELECT filer_id, source_key FROM filers").fetchall())
+        if cache:
+            cache.write_bytes(pickle.dumps((results, sigs, keys)))
+    s = skill_run.run(results, sigs, source, keys, Path(args.out),
+                      history=Path(args.insiders) if args.insiders else None,
+                      placebo_draws=args.placebos)
+    print(f"{len(results)} buy events, {s['pool_rows']} shown with the cap floor; "
+          f"wrote {Path(args.out) / 'report.md'}")
+
+
 def cmd_rank(args, settings):
     from .scoring import model, rank
 
@@ -518,6 +542,17 @@ def main(argv: list[str] | None = None) -> int:
     ml.add_argument("--placebos", type=int, default=20, help="shuffled-label walk-forwards")
     ml.add_argument("--quick", action="store_true", help="the primary setup only")
     ml.set_defaults(fn=cmd_ml_study)
+
+    sk = sub.add_parser("skill-study", help="insiders whose earlier buys beat SPY: "
+                        "point-in-time records on top of the two-input score")
+    sk.add_argument("--prices", required=True, help="as for backtest")
+    sk.add_argument("--sic", help="SIC CSV from fetch-sic (sector benchmarks)")
+    sk.add_argument("--shares", required=True, help="share counts CSV (the $50M floor)")
+    sk.add_argument("--insiders", help="insider-history CSV: adds buys filed before 2015")
+    sk.add_argument("--out", required=True, help="directory for report.md and summary.json")
+    sk.add_argument("--cache", help="pickle of the loaded events and signals, reused if present")
+    sk.add_argument("--placebos", type=int, default=500, help="random gates per filter")
+    sk.set_defaults(fn=cmd_skill_study)
 
     rk = sub.add_parser("rank", help="top buys filed recently, scored with a fitted model")
     rk.add_argument("--model", required=True, help="model.json from score-backtest")

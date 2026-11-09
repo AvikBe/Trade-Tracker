@@ -44,6 +44,7 @@ tt fetch-shares --out shares.csv        # SEC share counts, for the market-cap f
 tt insider-history --quarters 2012q1:2026q2 --out history.csv.gz   # routine vs opportunistic
 tt score-backtest ... --shares shares.csv --min-cap 50 --horizon 60 --bench beta --vol-target 0.4 --variants cap
 tt ml-study --prices DIR --sic sic.csv --shares shares.csv --insiders history.csv.gz --out results/ml
+tt skill-study --prices DIR --sic sic.csv --shares shares.csv --insiders history.csv.gz --out results/skill
 ```
 
 `load-prices` spends at most the remaining hourly and daily Tiingo quota per run and
@@ -303,6 +304,31 @@ rerun on the same pool.
 Set `TT_ML_THREADS` to at most the idle cores: oversubscribed OpenMP threads make LightGBM
 around 100x slower. `scripts/crosscheck_ml.py --run results/ml --prices DIR` rebuilds the
 features with pandas from the raw bars and events and rechecks fold sizes and means.
+
+## Insider skill (milestone 4f)
+
+`tt skill-study` asks whether insiders whose earlier buys beat SPY keep beating it
+(`tradetracker/skill.py`, `scoring/skill_study.py`). For each buy, the insider's record is
+taken as it stood the day before the filing:
+
+- **Episodes**: every earlier open-market buy by the same reporting owner at any
+  company, not under a 10b5-1 plan; buys of one stock filed in the same month count once.
+  The outcome is the 20- or 60-session excess return over SPY (gross, clipped to +-100%),
+  and it counts only once its exit is before the new filing date. The database's own
+  events supply 2015 on; `--insiders` adds 2014 buys from the SEC data sets, priced from
+  the same bars (Yahoo bars start in 2014).
+- **Record**: at least 3 known episodes, shrunk toward the average insider's episodes
+  known by then, with k (episodes needed for half weight) estimated from records known
+  before 2017.
+- **Study**: persistence by record bucket with no model, year by year; then the record in
+  the paper-traded setup (`SKILL_VARIANTS`): as a third input in Q, as a gate on what the
+  model flags ("proven" or "losers hidden"), and alone, with the same walk-forward and
+  go-live criteria, plus 40-slot book IRs. Each gate is checked against random gates
+  that keep the same number of flagged buys each year.
+
+`scripts/crosscheck_skill.py --run results/skill --prices DIR --insiders history.csv.gz`
+rebuilds the episodes, k and a sample of records with pandas from the run's event list,
+the history file and the raw bars, and checks the records are point in time.
 
 ## Tests
 

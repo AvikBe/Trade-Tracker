@@ -20,6 +20,9 @@ what scoring needs beyond them, each from data public before the event's entry:
 - `insider_type`: "routine" or "opportunistic" (Cohen, Malloy and Pomorski 2012), from
   the insider's trading in the three calendar years before this one, as filed by 1
   January (see `tradetracker.insiders`). None when unclassified.
+- `skill_20`, `skill_60`: the insider's shrunk mean excess return over SPY on earlier
+  buy episodes at that hold, known before the filing date (see `tradetracker.skill`),
+  with `skill_n*` known episodes, the raw mean and the hit rate. None without a record.
 - `dollar_volume` and `drift` are the backtest's own (median over the 20 sessions
   before entry, and trade date to last close before entry).
 """
@@ -57,6 +60,20 @@ class Signals:
     beta: float | None = None    # vs SPY, daily returns over the 250 sessions before entry
     vol: float | None = None     # annualized, same window
     insider_type: str | None = None
+    skill_20: float | None = None   # shrunk record (None: fewer than MIN_EPISODES)
+    skill_60: float | None = None
+    skill_n20: int = 0              # known episodes, whatever their number
+    skill_n60: int = 0
+    skill_raw20: float | None = None
+    skill_raw60: float | None = None
+    skill_hit20: float | None = None
+    skill_hit60: float | None = None
+
+    def skill(self, h: int) -> float | None:
+        return self.skill_20 if h == 20 else self.skill_60 if h == 60 else None
+
+    def skill_n(self, h: int) -> int:
+        return self.skill_n20 if h == 20 else self.skill_n60 if h == 60 else 0
 
     def as_dict(self) -> dict:
         return dict(self.__dict__)
@@ -131,11 +148,13 @@ class _History:
 
 
 def build(results: list[Result], prices, h: int = PRIMARY_H, shares=None,
-          insiders=None, filer_keys: dict[int, str] | None = None) -> list[Signals]:
+          insiders=None, filer_keys: dict[int, str] | None = None,
+          skills: dict | None = None) -> list[Signals]:
     """Signals for every result, aligned with `results`.
 
     `insiders` (an `insiders.Classifier`) and `filer_keys` (filer_id -> owner CIK) fill
-    `insider_type`.
+    `insider_type`. `skills` (horizon -> `skill.SkillBook`, keyed by owner CIK when
+    `filer_keys` is given, else "filer:<id>") fills the skill fields.
 
     `results` must hold every event the history features should see (all buys, not just
     the ones being scored): a repeat buy or a track record counts earlier events whatever
@@ -161,6 +180,7 @@ def build(results: list[Result], prices, h: int = PRIMARY_H, shares=None,
         tr_vals = track.before(e.filer_id, o.entry or e.entry_date)
         tr = sum(tr_vals) / len(tr_vals) if len(tr_vals) >= TRACK_MIN_EVENTS else None
         beta, vol = risk(prices, e.ticker, o.entry) if o.entry else (None, None)
+        sk = _skill_fields(skills, e, filer_keys) if skills else {}
         out.append(Signals(
             role=e.role,
             value=e.value,
@@ -178,5 +198,17 @@ def build(results: list[Result], prices, h: int = PRIMARY_H, shares=None,
             vol=vol,
             insider_type=(insiders.kind(filer_keys.get(e.filer_id), e.filing_date)
                           if insiders is not None and filer_keys else None),
+            **sk,
         ))
+    return out
+
+
+def _skill_fields(skills: dict, e, filer_keys: dict[int, str] | None) -> dict:
+    from ..skill import owner_key
+    owner = owner_key(filer_keys.get(e.filer_id)) if filer_keys else f"filer:{e.filer_id}"
+    out = {}
+    for h, book in skills.items():
+        r = book.record(owner, e.filing_date)
+        out.update({f"skill_{h}": r.shrunk, f"skill_n{h}": r.n, f"skill_raw{h}": r.raw,
+                    f"skill_hit{h}": r.hit})
     return out
