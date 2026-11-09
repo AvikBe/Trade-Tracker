@@ -180,7 +180,7 @@ def test_cli_cap_floor_hedged_run_and_its_cross_check(scored, tmp_path, monkeypa
     assert all(float(r["market_cap"]) >= 50e6 for r in rows)
     summary = json.loads((out / "summary.json").read_text())
     assert summary["config"] == {"name": "cap floor, vol control", "h": 20, "bench": "beta",
-                                 "min_cap": 50e6, "vol_target": 0.4, "only_type": None,
+                                 "min_cap": 50e6, "vol_target": 0.4, "only_type": None, "skill_filter": None,
                                  "components": None}
     assert "cap >= $50M" in (out / "report.md").read_text()
     path = Path(__file__).parents[1] / "scripts" / "crosscheck_scoring.py"
@@ -270,3 +270,32 @@ def test_cli_two_input_run_and_its_cross_check(scored, tmp_path, monkeypatch):
     xc = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(xc)
     assert xc.run_checks(out, REAL / "backtest_bars", os.environ["TT_TEST_DATABASE_URL"]) == []
+
+
+def test_real_insider_skill_episode_by_hand(scored, conn):
+    """RMCF director Jeffrey Geygan (CIK 1733547) bought RMCF on five filings in November
+    2023 (filed 6, 8, 13, 16 and 21 Nov, tests/fixtures/real/insider_history.csv.gz): one
+    episode, the 6 Nov filing's. Bought at the 7 Nov open (4.03), sold at the 20th
+    session's close, 5 Dec (4.11); SPY adjusted 420.19234243116415 -> 440.35856584743635
+    (tests/fixtures/real/backtest_bars). His 2024 RMCF buys in the database all see it."""
+    from tradetracker import skill as SK
+
+    res, _, src = scored
+    keys = dict(conn.execute("SELECT filer_id, source_key FROM filers").fetchall())
+    books = SK.build_books(res, src, keys, history=REAL / "insider_history.csv.gz",
+                           tickers={"1616262": "RMCF"}, db_start=date(2024, 1, 1),
+                           horizons=(20,))
+    nov = [e for e in books[20].episodes if e.owner == "1733547" and e.filed.year == 2023]
+    assert len(nov) == 1
+    (e,) = nov
+    assert (e.issuer, e.filed, e.known) == ("1616262", date(2023, 11, 6), date(2023, 12, 5))
+    assert e.excess == pytest.approx((4.11 / 4.03 - 1)
+                                     - (440.35856584743635 / 420.19234243116415 - 1))
+    geygan = [x for x in res if keys.get(x.event.filer_id) == "1733547"
+              and x.event.side == "buy" and x.event.ticker == "RMCF"]
+    assert geygan
+    for x in geygan:
+        r = books[20].record("1733547", x.event.filing_date)
+        assert r.n >= 1
+        assert r.n == sum(1 for ep in books[20].episodes
+                          if ep.owner == "1733547" and ep.known < x.event.filing_date)

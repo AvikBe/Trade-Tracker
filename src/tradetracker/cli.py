@@ -357,6 +357,30 @@ def cmd_ml_study(args, settings):
     ml_run.run(results, sigs, evs, source, Path(args.out), placebos=args.placebos, setups=setups)
 
 
+def cmd_skill_study(args, settings):
+    """Insider records (beat SPY before?) on top of the two-input score."""
+    import pickle
+
+    from .backtest import prices as bt_prices
+    from .scoring import skill_run
+
+    cache = Path(args.cache) if args.cache else None
+    if cache and cache.exists():
+        results, sigs, keys = pickle.loads(cache.read_bytes())
+        source = bt_prices.open_source(args.prices, None)
+    else:
+        with db.connect(settings.database_url) as conn:
+            source, results, sigs, _ = _scoring_inputs(args, conn)
+            keys = dict(conn.execute("SELECT filer_id, source_key FROM filers").fetchall())
+        if cache:
+            cache.write_bytes(pickle.dumps((results, sigs, keys)))
+    s = skill_run.run(results, sigs, source, keys, Path(args.out),
+                      history=Path(args.insiders) if args.insiders else None,
+                      placebo_draws=args.placebos)
+    print(f"{len(results)} buy events, {s['pool_rows']} shown with the cap floor; "
+          f"wrote {Path(args.out) / 'report.md'}")
+
+
 def cmd_rank(args, settings):
     from .scoring import model, rank
 
@@ -381,7 +405,9 @@ def cmd_paper_trade(args, settings):
                         settings.require_edgar(),
                         today=date.fromisoformat(args.today) if args.today else None,
                         shares_seed=Path(args.shares) if args.shares else None,
-                        filings_cache=Path(args.filings) if args.filings else None)
+                        filings_cache=Path(args.filings) if args.filings else None,
+                        slots=args.slots,
+                        skill_episodes=Path(args.skill_episodes) if args.skill_episodes else None)
     print(f"session {res.session or 'none (market closed)'}")
     for line in res.ingested + res.notes:
         print(f"  {line}")
@@ -519,6 +545,17 @@ def main(argv: list[str] | None = None) -> int:
     ml.add_argument("--quick", action="store_true", help="the primary setup only")
     ml.set_defaults(fn=cmd_ml_study)
 
+    sk = sub.add_parser("skill-study", help="insiders whose earlier buys beat SPY: "
+                        "point-in-time records on top of the two-input score")
+    sk.add_argument("--prices", required=True, help="as for backtest")
+    sk.add_argument("--sic", help="SIC CSV from fetch-sic (sector benchmarks)")
+    sk.add_argument("--shares", required=True, help="share counts CSV (the $50M floor)")
+    sk.add_argument("--insiders", help="insider-history CSV: adds buys filed before 2015")
+    sk.add_argument("--out", required=True, help="directory for report.md and summary.json")
+    sk.add_argument("--cache", help="pickle of the loaded events and signals, reused if present")
+    sk.add_argument("--placebos", type=int, default=500, help="random gates per filter")
+    sk.set_defaults(fn=cmd_skill_study)
+
     rk = sub.add_parser("rank", help="top buys filed recently, scored with a fitted model")
     rk.add_argument("--model", required=True, help="model.json from score-backtest")
     rk.add_argument("--prices", required=True, help="as for backtest")
@@ -539,6 +576,11 @@ def main(argv: list[str] | None = None) -> int:
     pt.add_argument("--shares", help="share-count CSV to seed the book's copy (fetch-shares)")
     pt.add_argument("--filings", help="directory for the per-day filings cache (shared by books)")
     pt.add_argument("--today", help="run as of this date (YYYY-MM-DD), for replays and tests")
+    pt.add_argument("--skill-episodes",
+                    help="episodes.csv.gz from tt skill-study: buy only insiders with a "
+                    "positive 60-day record (the shadow book)")
+    pt.add_argument("--slots", type=int, default=None,
+                    help="book size: positions held at once, each 1/slots of equity (default 40)")
     pt.set_defaults(fn=cmd_paper_trade)
 
     ac = sub.add_parser("alpaca-check",

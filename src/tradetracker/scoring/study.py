@@ -57,6 +57,10 @@ class Config:
     - `components`: Q's components, or None for phase 4's.
     - `vol_target`: size portfolio positions at vol_target / the stock's volatility
       (at most `MAX_WEIGHT` slots), or None for equal slots.
+    - `skill_filter`: a gate on what the model flags, applied after scoring (the model is
+      fitted on every shown buy, as the paper book's is). "proven" flags only insiders
+      with a record (`skill.MIN_EPISODES` known episodes) whose shrunk excess over SPY at
+      this hold is above 0; "no losers" drops only insiders whose record is below 0.
     """
     name: str = "phase 4"
     h: int = PRIMARY_H
@@ -64,6 +68,7 @@ class Config:
     min_cap: float | None = None
     vol_target: float | None = None
     only_type: str | None = None             # show only "opportunistic" (or "routine") buys
+    skill_filter: str | None = None          # "proven" or "no losers" (see `skill_ok`)
     components: tuple[str, ...] | None = None    # None: phase 4's (M.BASE_COMPONENTS)
 
     def label(self) -> str:
@@ -78,6 +83,11 @@ class Config:
             parts.append("insider type in Q")
         if self.components == TWO_INPUTS:
             parts.append("drawdown and run-up only")
+        if self.components and any(c.startswith("skill") for c in self.components):
+            parts.append(" + ".join(self.components) + " in Q")
+        if self.skill_filter:
+            parts.append(f"{self.skill_filter} insiders only" if self.skill_filter == "proven"
+                         else "insiders with a losing record hidden")
         return ", ".join(parts)
 
     def comps(self) -> list[str]:
@@ -116,6 +126,25 @@ TWO_INPUT_VARIANTS = [PHASE4] + [
            components=TWO_INPUTS)
     for cap in (False, True) for hedge in (False, True) for h in (20, 60)
 ]
+# avik, 2026-11-09: "hone in on executives who consistently ... outpac[e] the s&p 500".
+# The insider's point-in-time record (`tradetracker.skill`) on top of the paper-traded
+# setup (two inputs, 60 days, $50M floor), as a third input and as a filter, and the same
+# at 20 days. "skill alone" ranks by the record and the run-up penalty only.
+SKILL_VARIANTS = [
+    Config("two inputs, 60 days, cap floor", h=60, min_cap=50e6, components=TWO_INPUTS),
+    Config("skill in Q, 60 days, cap floor", h=60, min_cap=50e6,
+           components=("drawdown", "skill 60")),
+    Config("proven insiders, 60 days, cap floor", h=60, min_cap=50e6,
+           components=TWO_INPUTS, skill_filter="proven"),
+    Config("losers hidden, 60 days, cap floor", h=60, min_cap=50e6,
+           components=TWO_INPUTS, skill_filter="no losers"),
+    Config("skill alone, 60 days, cap floor", h=60, min_cap=50e6, components=("skill 60",)),
+    Config("two inputs, 20 days, cap floor", h=20, min_cap=50e6, components=TWO_INPUTS),
+    Config("skill in Q, 20 days, cap floor", h=20, min_cap=50e6,
+           components=("drawdown", "skill 20")),
+    Config("proven insiders, 20 days, cap floor", h=20, min_cap=50e6,
+           components=TWO_INPUTS, skill_filter="proven"),
+]
 RULE_DRAWDOWN = -0.25      # the fixed rule: at least 25% below the 52-week high ...
 RULE_DRIFT = 0.0           # ... and no rise between the trade and entry
 
@@ -131,6 +160,17 @@ def add_beta_legs(results: list[Result], signals: list[Signals]) -> None:
         b = hedge_beta(s)
         for leg in x.outcome.legs.values():
             leg["beta"] = None if leg.get("spy") is None else b * leg["spy"]
+
+
+def skill_ok(s: Signals, cfg: Config) -> bool:
+    if cfg.skill_filter is None:
+        return True
+    v = s.skill(cfg.h)
+    if cfg.skill_filter == "proven":
+        return v is not None and v > 0
+    if cfg.skill_filter == "no losers":
+        return v is None or v >= 0
+    raise ValueError(f"unknown skill filter {cfg.skill_filter!r}")
 
 
 def shown(x: Result, s: Signals, cfg: Config = PHASE4) -> bool:
@@ -175,11 +215,12 @@ def training_set(pool, h, start, bench: str = "spy"):
 
 
 def dedupe(scored: list[Scored]) -> list[Scored]:
-    """One entry per stock and entry day: the best-scored insider's."""
+    """One entry per stock and entry day: the best-scored insider's (a flagged one first,
+    which only matters under a skill filter)."""
     best: dict[tuple, Scored] = {}
     for x in scored:
         k = (x.result.event.ticker, x.result.outcome.entry)
-        if k not in best or x.score > best[k].score:
+        if k not in best or (x.above, x.score) > (best[k].above, best[k].score):
             best[k] = x
     return sorted(best.values(), key=lambda x: (x.result.outcome.entry, -x.score,
                                                 x.result.event.ticker))
@@ -203,7 +244,8 @@ def walk_forward(results: list[Result], signals: list[Signals], h: int | None = 
         for x, s in pool:
             if x.outcome.entry.year == y:
                 sc = m.score(s)
-                test.append(Scored(x, s, sc, m.quality(s), y, sc >= m.threshold))
+                test.append(Scored(x, s, sc, m.quality(s), y,
+                                   sc >= m.threshold and skill_ok(s, cfg)))
         folds.append(Fold(y, m, len(ys), dedupe(test)))
     return folds
 
@@ -558,11 +600,18 @@ def run_config(results, signals, prices, cfg: Config) -> tuple[list[Fold], dict,
     return folds, pooled, pf
 
 
-def variants_table(results, signals, prices, configs=VARIANTS) -> tuple[str, dict]:
-    """The same model under each configuration: one row per variant, all out of sample."""
+def variants_table(results, signals, prices, configs=VARIANTS,
+                   extra_slots: int | None = None) -> tuple[str, dict]:
+    """The same model under each configuration: one row per variant, all out of sample.
+    `extra_slots` adds the portfolio IR of a book that size (the paper book has 40)."""
     rows, out = [], {}
     for cfg in configs:
         folds, pooled, pf = run_config(results, signals, prices, cfg)
+        extra = []
+        if extra_slots:
+            pfx = simulate(pooled["top"], prices, cfg.h, slots=extra_slots,
+                           hedged=cfg.bench == "beta", vol_target=cfg.vol_target)
+            extra = [num(pfx.ir()), pct(pfx.annual_excess())]
         s = _summ(pooled["top"], cfg.h, cfg.bench)
         a = _summ(pooled["all"], cfg.h, cfg.bench)
         yearly = [v for v in pooled["yearly"] if v is not None]
@@ -571,11 +620,18 @@ def variants_table(results, signals, prices, configs=VARIANTS) -> tuple[str, dic
         rows.append([cfg.name, cfg.label(), a.n, pct(a.mean), s.n, pct(s.mean),
                      num(s.t_cluster), f"{sum(v > 0 for v in yearly)} of {len(yearly)}",
                      pct(hit_rate(pooled["top"], cfg.h, cfg.bench), 1), num(pf.ir()),
-                     num(mdd / smdd if smdd < 0 else None), f"{sum(ok)} of 4"])
+                     num(mdd / smdd if smdd < 0 else None), f"{sum(ok)} of 4"] + extra)
         out[cfg.name] = summary(folds, pf, cfg)
-    return table(["variant", "setup", "shown", "all, net", "above cutoff", "their net mean",
-                  "t (clustered)", "years positive", "hit rate", "portfolio IR",
-                  "drawdown vs SPY", "criteria met"], rows), out
+        if extra_slots:
+            out[cfg.name]["portfolio_extra"] = {"slots": extra_slots, "ir": pfx.ir(),
+                                                "annual_excess": pfx.annual_excess(),
+                                                "trades": pfx.trades}
+    head = ["variant", "setup", "shown", "all, net", "above cutoff", "their net mean",
+            "t (clustered)", "years positive", "hit rate", "portfolio IR",
+            "drawdown vs SPY", "criteria met"]
+    if extra_slots:
+        head += [f"{extra_slots}-slot IR", f"{extra_slots}-slot excess/yr"]
+    return table(head, rows), out
 
 
 def render(results: list[Result], signals: list[Signals], prices, final: M.Model,

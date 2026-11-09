@@ -2,6 +2,7 @@
 
 import gzip
 import json
+import math
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -929,3 +930,114 @@ def test_outcome_unchanged_by_refactor():
     e2 = ev(first_trade_date=bars.dates[-5], last_trade_date=bars.dates[-5],
             filing_date=bars.dates[-2], value=50_000.0, shares=1000.0)
     assert pre_entry(e2, bars, ENTRY, Outcome("ok")).status == "ticker_mismatch"
+
+
+# ------------------------------------------------- book size (20 -> 40 slots, 2026-11-09)
+
+def _ranked_market(names):
+    """Flat stocks, each a distinct depth below its high, all past the cutoff."""
+    bars, ds = flat_market(names)
+    for k, t in enumerate(names):
+        f = 1 + 0.02 * (k % 25)
+        bars[t] = bp.Bars([bp.Bar(x.date, x.close * (1 if i >= 300 else f), x.close * (1 if i >= 300 else f),
+                                  x.close * (1 if i >= 300 else f), x.close * (1 if i >= 300 else f), 1e6)
+                           for i, x in enumerate(bars[t].bars)])
+    return bars, ds
+
+
+def test_default_book_is_40_slots():
+    assert E.SLOTS == 40
+    assert E.Config(state_dir=Path("x"), model=MODEL).slots == 40
+
+
+def test_fresh_book_records_40_slots_without_a_note(tmp_path):
+    names = [f"T{i:02d}" for i in range(45)]
+    bars, ds = _ranked_market(names)
+    filed, entry = ds[320], ds[321]
+    write_day(tmp_path / "filings", filed,
+              [buy_filing(t, k + 1, filed, price=price_on(bars, t, filed)) for k, t in enumerate(names)])
+    b = new_book(tmp_path, bars, ds, filed, slots=40)
+    r = b.run(entry)
+    assert len(r.submitted) == 40 and len({o["ticker"] for o in r.submitted}) == 40
+    assert not any("slots changed" in n for n in r.notes)
+    st = E.load_state(b.state_path)
+    assert st["slots"] == 40
+    for p in st["positions"]:
+        assert p["entry_order"]["qty"] == math.floor(100_000 / 40 / p["signal_close"])
+    assert (b.cfg.state_dir / "decisions.csv").read_text().count("no free slot") == 5
+    assert "| 40 of 40 |" in R.render(st, b.prices, entry, 100_000)
+    assert "40 slots of 1/40 of equity" in R.render(st, b.prices, entry, 100_000)
+
+
+def test_full_20_slot_book_grows_to_40(tmp_path):
+    """The dry-run book on 2026-11-09: 20 positions held at 1/20 each. Switching to 40
+    keeps them as they are and fills the 20 new slots at 1/40 of equity."""
+    first = [f"A{i:02d}" for i in range(20)]
+    later = [f"B{i:02d}" for i in range(25)]
+    bars, ds = _ranked_market(first + later)
+    filed, entry = ds[320], ds[321]
+    write_day(tmp_path / "filings", filed,
+              [buy_filing(t, k + 1, filed, price=price_on(bars, t, filed)) for k, t in enumerate(first)])
+    b20 = new_book(tmp_path, bars, ds, filed, slots=20)
+    r1 = b20.run(entry)
+    assert len(r1.submitted) == 20
+    before = {p["ticker"]: dict(p["entry_order"]) for p in E.load_state(b20.state_path)["positions"]}
+    st = E.load_state(b20.state_path)
+    st.pop("slots")                       # state files written before this change have no slots key
+    E.save_state(b20.state_path, st)
+
+    # Next morning: 25 new candidates, book now 40 slots.
+    d2 = NYSE.add(entry, 1)
+    write_day(tmp_path / "filings", entry,
+              [buy_filing(t, 100 + k, entry, price=price_on(bars, t, entry)) for k, t in enumerate(later)])
+    b40 = book(tmp_path, bars, slots=40)
+    r2 = b40.run(d2)
+    assert any("slots changed from 20 to 40" in n for n in r2.notes)
+    bought = [o["ticker"] for o in r2.submitted]
+    assert len(bought) == 20 and set(bought) <= set(later)
+    st = E.load_state(b40.state_path)
+    assert st["slots"] == 40
+    assert len(E.live_positions(st)) == 40
+    eq = b40.equity(st, d2)
+    for p in st["positions"]:
+        if p["ticker"] in before:         # held positions untouched
+            assert p["entry_order"]["qty"] == before[p["ticker"]]["qty"]
+            assert p["entry_order"]["client_id"] == before[p["ticker"]]["client_id"]
+            assert p["status"] == "open"
+        elif p["status"] == "pending_entry":
+            assert p["entry_order"]["qty"] == math.floor(eq / 40 / p["signal_close"])
+            assert p["entry_order"]["qty"] * p["signal_close"] <= eq / 40
+    assert (b40.cfg.state_dir / "decisions.csv").read_text().count("no free slot") == 5
+    # A third morning: the note is not repeated, and a full 40-slot book buys nothing.
+    d3 = NYSE.add(d2, 1)
+    write_day(tmp_path / "filings", d2, [buy_filing("ZZZ", 999, d2, price=1)])
+    r3 = b40.run(d3)
+    assert not any("slots changed" in n for n in r3.notes)
+    assert not r3.submitted
+
+
+def test_report_defaults_to_20_slots_for_old_state(tmp_path):
+    bars, ds = flat_market(["AAA"])
+    b = new_book(tmp_path, bars, ds, ds[320])
+    st = E.load_state(b.state_path)
+    st.pop("slots", None)
+    assert "| 0 of 20 |" in R.render(st, b.prices, ds[321], 100_000)
+
+
+def test_cli_passes_slots(monkeypatch, tmp_path):
+    seen = {}
+
+    def fake_run(state, model, broker, ua, **kw):
+        seen.update(kw)
+        return E.RunResult(date(2026, 11, 9))
+    monkeypatch.setattr(RUN, "run", fake_run)
+    monkeypatch.setenv("EDGAR_USER_AGENT", "Test t@example.com")
+    assert cli_main(["paper-trade", "--state", str(tmp_path), "--model", "m.json", "--slots", "40"]) == 0
+    assert seen["slots"] == 40
+    assert cli_main(["paper-trade", "--state", str(tmp_path), "--model", "m.json"]) == 0
+    assert seen["slots"] is None          # run() falls back to engine.SLOTS
+
+
+def test_run_rejects_bad_slots(tmp_path):
+    with pytest.raises(ValueError):
+        RUN.run(tmp_path, tmp_path / "m.json", "dry-run", "Test t@example.com", slots=0)

@@ -10,6 +10,7 @@ REPO=${TT_REPO_DIR:-/home/user/trade-tracker}
 BRANCH=${TT_PAPER_BRANCH:-m5-paper-trading}
 MODEL=${TT_PAPER_MODEL:-$REPO/models/two-inputs-60-days-cap-floor.json}
 SHARES=${TT_SHARES_SEED:-/mnt/project-files/fundamentals/shares-outstanding.csv}
+SLOTS=${TT_PAPER_SLOTS:-40}   # book size, both books (20 until 2026-11-09)
 status=0
 {
   echo "=== $(date -u +%FT%TZ)"
@@ -28,7 +29,7 @@ status=0
   fi
   for b in $books; do
     echo "--- $b"
-    out=$(tt paper-trade --state "$ROOT/$b" --broker "$b" --model "$MODEL" --shares "$SHARES" \
+    out=$(tt paper-trade --state "$ROOT/$b" --broker "$b" --model "$MODEL" --slots "$SLOTS" --shares "$SHARES" \
       --filings "$ROOT/filings" 2>&1)
     rc=$?
     printf '%s\n' "$out" | grep -v -e "HTTP Request" -e "dry run: would"

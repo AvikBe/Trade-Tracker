@@ -45,6 +45,10 @@ def _edges(x: float | None, edges: list[float], labels: list[str], missing: str)
     return labels[-1]
 
 
+SKILL_EDGES = {20: [-0.01, 0.0, 0.01], 60: [-0.02, 0.0, 0.02]}
+SKILL_LABELS = {20: ["< -1%", "-1 to 0%", "0 to 1%", ">= 1%"],
+                60: ["< -2%", "-2 to 0%", "0 to 2%", ">= 2%"]}
+
 # name -> (bucket function, bucket labels in display order)
 COMPONENTS: dict[str, tuple] = {
     "role": (
@@ -90,6 +94,17 @@ COMPONENTS: dict[str, tuple] = {
     "insider type": (
         lambda s: s.insider_type or "unclassified",
         ["opportunistic", "routine", "unclassified"],
+    ),
+    # The insider's shrunk record at each hold (see `tradetracker.skill`). Not in the
+    # phase 4 model: only the skill setups name them. Edges are round numbers around the
+    # average insider's record.
+    "skill 20": (
+        lambda s: _edges(s.skill_20, SKILL_EDGES[20], SKILL_LABELS[20], "no record"),
+        SKILL_LABELS[20] + ["no record"],
+    ),
+    "skill 60": (
+        lambda s: _edges(s.skill_60, SKILL_EDGES[60], SKILL_LABELS[60], "no record"),
+        SKILL_LABELS[60] + ["no record"],
     ),
 }
 # Phase 4's components: the default when a fit names none.
