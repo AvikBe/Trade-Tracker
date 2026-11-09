@@ -64,8 +64,14 @@ def history_rows(run_events: pd.DataFrame, history: Path, prices: Path, h: int) 
     hist["issuer"] = hist.issuer_cik.str.lstrip("0")
     hist = hist[(hist.owner != "") & (hist.issuer != "")]
     hist = hist.drop_duplicates(["owner", "issuer", "filed"])
-    ev = run_events.dropna(subset=["issuer"]).sort_values("filing_date")
-    tick = ev.drop_duplicates("issuer").set_index("issuer").ticker.to_dict()
+    ev = run_events.dropna(subset=["issuer", "ticker"])
+    cnt = ev.groupby(["issuer", "ticker"]).size().rename("cnt").reset_index()
+    firstday = ev.groupby("issuer").filing_date.min().rename("first").reset_index()
+    cand = ev.merge(firstday, on="issuer")
+    cand = cand[cand.filing_date == cand["first"]][["issuer", "ticker"]].drop_duplicates()
+    cand = cand.merge(cnt, on=["issuer", "ticker"]).sort_values(
+        ["issuer", "cnt", "ticker"], ascending=[True, False, True])
+    tick = cand.drop_duplicates("issuer").set_index("issuer").ticker.to_dict()
     cache: dict = {}
     spy = load_bars(prices, "SPY", cache).set_index("date")
     out = []

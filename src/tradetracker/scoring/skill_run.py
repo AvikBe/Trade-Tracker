@@ -20,14 +20,22 @@ POOL_COLUMNS = ["filer_id", "owner", "issuer_cik", "ticker", "filing_date", "ent
 
 
 def issuer_tickers(results) -> dict[str, str]:
-    """issuer CIK -> the ticker of its earliest backtest event (closest to 2014)."""
-    out: dict[str, tuple] = {}
+    """issuer CIK -> the ticker of its earliest backtest event (closest to 2014). When
+    several tickers share that first filing day (a typo on one filing), the one the
+    issuer's events use most often wins, then the alphabetically first."""
+    first: dict[str, object] = {}
+    counts: dict[tuple[str, str], int] = {}
     for x in results:
         e = x.event
         k = SK.owner_key(e.issuer_cik)
-        if k and e.ticker and (k not in out or e.filing_date < out[k][0]):
-            out[k] = (e.filing_date, e.ticker)
-    return {k: v[1] for k, v in out.items()}
+        if not (k and e.ticker):
+            continue
+        counts[(k, e.ticker)] = counts.get((k, e.ticker), 0) + 1
+        if k not in first or e.filing_date < first[k][0]:
+            first[k] = (e.filing_date, {e.ticker})
+        elif e.filing_date == first[k][0]:
+            first[k][1].add(e.ticker)
+    return {k: min(ts, key=lambda t: (-counts[(k, t)], t)) for k, (_, ts) in first.items()}
 
 
 def attach(signals, results, books, owner_keys):

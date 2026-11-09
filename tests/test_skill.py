@@ -349,3 +349,13 @@ def test_cli_registers_skill_study():
     with pytest.raises(SystemExit) as e:
         cli.main(["skill-study", "--help"])
     assert e.value.code == 0
+
+
+def test_issuer_tickers_take_the_first_filing_and_break_ties_by_use():
+    rs = [res(ev(issuer_cik="0001099574", ticker="ETBI", filing_date=D(2015, 1, 21)), {20: 0}),
+          res(ev(issuer_cik="1099574", ticker="EBTI", filing_date=D(2015, 1, 21)), {20: 0}),
+          res(ev(issuer_cik="1099574", ticker="EBTI", filing_date=D(2016, 1, 21)), {20: 0}),
+          res(ev(issuer_cik="5", ticker="NEW", filing_date=D(2020, 1, 2)), {20: 0}),
+          res(ev(issuer_cik="5", ticker="OLD", filing_date=D(2015, 1, 2)), {20: 0})]
+    assert SR.issuer_tickers(rs) == {"1099574": "EBTI", "5": "OLD"}
+    assert SR.issuer_tickers(list(reversed(rs))) == {"1099574": "EBTI", "5": "OLD"}
