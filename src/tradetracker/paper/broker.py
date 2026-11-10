@@ -31,6 +31,10 @@ log = logging.getLogger(__name__)
 PAPER_URL = "https://paper-api.alpaca.markets"
 FINAL = {"filled", "canceled", "expired", "rejected", "done_for_day_expired"}
 OPEN_TIF, CLOSE_TIF, DAY_TIF = "opg", "cls", "day"
+# Alpaca's paper account let both opening-auction (opg) buys of 2026-11-09 expire at
+# 9:31 ET unfilled. A market day order sent before the open fills at the opening quote,
+# which is how paper simulates opg anyway, so entries go as day orders.
+PAPER_OPG_NOTE = "sent as a day order: Alpaca paper let opg orders expire unfilled"
 
 
 @dataclass
@@ -52,7 +56,8 @@ class AlpacaPaper:
     kind = "alpaca"
 
     def __init__(self, key: str, secret: str, base_url: str = PAPER_URL,
-                 transport: httpx.BaseTransport | None = None):
+                 transport: httpx.BaseTransport | None = None, open_as_day: bool = True):
+        self.open_as_day = open_as_day
         if base_url.rstrip("/") != PAPER_URL:
             raise BrokerError(f"refusing {base_url}: only Alpaca's paper API ({PAPER_URL}) is allowed")
         if bool(key) != bool(secret):
@@ -147,12 +152,15 @@ class AlpacaPaper:
         existing = self.by_client_id(client_id)
         if existing is not None:
             return existing
+        pre = ""
+        if tif == OPEN_TIF and self.open_as_day:
+            tif, pre = DAY_TIF, PAPER_OPG_NOTE
         body = {"symbol": symbol, "qty": str(int(qty)), "side": side, "type": "market",
                 "time_in_force": tif, "client_order_id": client_id}
         r = self._req("POST", "/v2/orders", json=body)
         if r.status_code in (200, 201):
-            return self._fill(r.json())
-        note = f"{tif} refused: HTTP {r.status_code} {r.text[:200]}"
+            return self._fill(r.json(), note=pre)
+        note = (pre + "; " if pre else "") + f"{tif} refused: HTTP {r.status_code} {r.text[:200]}"
         if r.status_code in (403, 422) and tif in (OPEN_TIF, CLOSE_TIF):
             body.update(time_in_force=DAY_TIF, client_order_id=client_id + "-day")
             r2 = self._req("POST", "/v2/orders", json=body)
@@ -162,7 +170,8 @@ class AlpacaPaper:
         return Fill(status="rejected", note=note)
 
     def refresh(self, client_id: str, broker_id: str | None = None, **_) -> Fill:
-        f = self.by_client_id(client_id) or self.by_client_id(client_id + "-day")
+        # A "-day" resend replaces its original (refused, or canceled by hand), so it wins.
+        f = self.by_client_id(client_id + "-day") or self.by_client_id(client_id)
         return f or Fill(status="unknown", note="order not found at Alpaca")
 
 

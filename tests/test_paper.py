@@ -332,8 +332,8 @@ def test_model_cutoff_is_the_deep_drawdown_bucket():
 
 # ---------------------------------------------------------------- brokers
 
-def alpaca(handler):
-    return B.AlpacaPaper("k", "s", transport=httpx.MockTransport(handler))
+def alpaca(handler, **kw):
+    return B.AlpacaPaper("k", "s", transport=httpx.MockTransport(handler), **kw)
 
 
 def test_alpaca_refuses_live_urls_and_missing_keys(monkeypatch):
@@ -405,10 +405,11 @@ def test_alpaca_submit_sends_a_paper_market_order():
             return httpx.Response(404, json={"message": "not found"})
         body = json.loads(req.content)
         assert body == {"symbol": "IMSR", "qty": "1607", "side": "buy", "type": "market",
-                        "time_in_force": "opg", "client_order_id": "tt-2026-10-14-IMSR-buy"}
-        return httpx.Response(200, json=order_json(body["client_order_id"]))
+                        "time_in_force": "day", "client_order_id": "tt-2026-10-14-IMSR-buy"}
+        return httpx.Response(200, json=order_json(body["client_order_id"], tif="day"))
     f = alpaca(handler).submit("IMSR", 1607, "buy", "opg", "tt-2026-10-14-IMSR-buy", date(2026, 10, 14))
-    assert f.status == "accepted" and f.broker_id == "oid-tt-2026-10-14-IMSR-buy" and f.tif == "opg"
+    assert f.status == "accepted" and f.broker_id == "oid-tt-2026-10-14-IMSR-buy" and f.tif == "day"
+    assert f.note == B.PAPER_OPG_NOTE
     assert [r.method for r in seen] == ["GET", "POST"]
     assert seen[0].url.path == "/v2/orders:by_client_order_id"
 
@@ -432,10 +433,42 @@ def test_alpaca_auction_refused_falls_back_to_day():
         if body["time_in_force"] == "opg":
             return httpx.Response(422, json={"message": "opg orders must be submitted before 9:28"})
         return httpx.Response(200, json=order_json(body["client_order_id"], tif="day"))
-    f = alpaca(handler).submit("X", 5, "buy", "opg", "cid", date(2026, 10, 14))
+    f = alpaca(handler, open_as_day=False).submit("X", 5, "buy", "opg", "cid", date(2026, 10, 14))
     assert [p["time_in_force"] for p in posts] == ["opg", "day"]
     assert posts[1]["client_order_id"] == "cid-day"
     assert f.tif == "day" and "opg refused" in f.note and f.status == "accepted"
+
+
+def test_alpaca_paper_entries_go_as_day_orders_and_exits_stay_cls():
+    """2026-11-09: Alpaca paper let both opg buys expire unfilled at 9:31 ET. Entries now
+    go as market day orders sent before the open; closing-auction sells are unchanged."""
+    posts = []
+
+    def handler(req):
+        if req.method == "GET":
+            return httpx.Response(404, json={})
+        body = json.loads(req.content)
+        posts.append(body)
+        return httpx.Response(200, json=order_json(body["client_order_id"], tif=body["time_in_force"]))
+    a = alpaca(handler)
+    buy = a.submit("X", 5, "buy", "opg", "tt-2026-11-10-X-buy", date(2026, 11, 10))
+    sell = a.submit("Y", 7, "sell", "cls", "tt-2026-11-10-Y-sell", date(2026, 11, 10))
+    assert [(p["time_in_force"], p["client_order_id"]) for p in posts] == [
+        ("day", "tt-2026-11-10-X-buy"), ("cls", "tt-2026-11-10-Y-sell")]
+    assert buy.tif == "day" and "expire" in buy.note
+    assert sell.tif == "cls" and sell.note == ""
+
+
+def test_alpaca_refresh_prefers_the_day_resend():
+    """An opg order canceled by hand and resent as '<id>-day': the resend is the live one."""
+    def handler(req):
+        cid = req.url.params["client_order_id"]
+        if cid == "cid":
+            return httpx.Response(200, json=order_json(cid, status="canceled"))
+        return httpx.Response(200, json=order_json(cid, status="filled", tif="day", filled_qty="5",
+                                                   price="2.5", filled_at="2026-11-10T14:30:01Z"))
+    f = alpaca(handler).refresh("cid")
+    assert f.status == "filled" and f.tif == "day" and f.filled_qty == 5
 
 
 def test_alpaca_rejection_and_lookups():
