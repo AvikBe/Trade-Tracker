@@ -12,6 +12,7 @@ MODEL=${TT_PAPER_MODEL:-$REPO/models/two-inputs-60-days-cap-floor.json}
 SHARES=${TT_SHARES_SEED:-/mnt/project-files/fundamentals/shares-outstanding.csv}
 SLOTS=${TT_PAPER_SLOTS:-40}   # book size, both books (20 until 2026-11-09)
 status=0
+TMPLOG=$(mktemp)
 {
   echo "=== $(date -u +%FT%TZ)"
   if ! git -C "$REPO" rev-parse HEAD >/dev/null 2>&1; then
@@ -35,6 +36,10 @@ status=0
     printf '%s\n' "$out" | grep -v -e "HTTP Request" -e "dry run: would"
     [ $rc -eq 0 ] || { echo "!!! $b book failed (exit $rc)"; status=1; }
   done
-} >> "$ROOT/daily.log" 2>&1
-tail -n 40 "$ROOT/daily.log"
+} > "$TMPLOG" 2>&1
+# Appended in one write at the end: an append held open for the whole run on the
+# project-files network mount was lost on 2026-11-11 and 2026-11-12.
+cat "$TMPLOG" >> "$ROOT/daily.log"
+cat "$TMPLOG"
+rm -f "$TMPLOG"
 exit $status
