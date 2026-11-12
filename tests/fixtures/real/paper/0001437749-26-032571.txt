@@ -1,0 +1,162 @@
+<SEC-DOCUMENT>0001437749-26-032571.txt : 20261013
+<SEC-HEADER>0001437749-26-032571.hdr.sgml : 20261013
+<ACCEPTANCE-DATETIME>20261013164912
+ACCESSION NUMBER:		0001437749-26-032571
+CONFORMED SUBMISSION TYPE:	4/A
+PUBLIC DOCUMENT COUNT:		1
+CONFORMED PERIOD OF REPORT:	20260908
+FILED AS OF DATE:		20261013
+DATE AS OF CHANGE:		20261013
+
+REPORTING-OWNER:	
+
+	OWNER DATA:	
+		COMPANY CONFORMED NAME:			HURT CLINT
+		CENTRAL INDEX KEY:			0000947836
+		ORGANIZATION NAME:           	
+
+	FILING VALUES:
+		FORM TYPE:		4/A
+		SEC ACT:		1934 Act
+		SEC FILE NUMBER:	000-07406
+		FILM NUMBER:		261457416
+
+	MAIL ADDRESS:	
+		STREET 1:		4015 HOLLAND #101
+		CITY:			DALLAS
+		STATE:			TX
+		ZIP:			75219
+
+ISSUER:		
+
+	COMPANY DATA:	
+		COMPANY CONFORMED NAME:			PRIMEENERGY RESOURCES CORP
+		CENTRAL INDEX KEY:			0000056868
+		STANDARD INDUSTRIAL CLASSIFICATION:	CRUDE PETROLEUM & NATURAL GAS [1311]
+		ORGANIZATION NAME:           	01 Energy & Transportation
+		EIN:				840637348
+		STATE OF INCORPORATION:			DE
+		FISCAL YEAR END:			1231
+
+	BUSINESS ADDRESS:	
+		STREET 1:		9821 KATY FREEWAY
+		STREET 2:		SUITE 1050
+		CITY:			HOUSTON
+		STATE:			TX
+		ZIP:			77024
+		BUSINESS PHONE:		2033585700
+
+	MAIL ADDRESS:	
+		STREET 1:		9821 KATY FREEWAY
+		STREET 2:		SUITE 1050
+		CITY:			HOUSTON
+		STATE:			TX
+		ZIP:			77024
+
+	FORMER COMPANY:	
+		FORMER CONFORMED NAME:	PRIMEENERGY CORP
+		DATE OF NAME CHANGE:	19920703
+
+	FORMER COMPANY:	
+		FORMER CONFORMED NAME:	KRM PETROLEUM CORP
+		DATE OF NAME CHANGE:	19900614
+</SEC-HEADER>
+<DOCUMENT>
+<TYPE>4/A
+<SEQUENCE>1
+<FILENAME>rdgdoc.xml
+<DESCRIPTION>FORM 4/A
+<TEXT>
+<XML>
+<?xml version="1.0"?>
+<ownershipDocument>
+
+    <schemaVersion>X0609</schemaVersion>
+
+    <documentType>4/A</documentType>
+
+    <periodOfReport>2026-09-08</periodOfReport>
+
+    <dateOfOriginalSubmission>2026-09-10</dateOfOriginalSubmission>
+
+    <issuer>
+        <issuerCik>0000056868</issuerCik>
+        <issuerName>PRIMEENERGY RESOURCES CORP</issuerName>
+        <issuerTradingSymbol>PNRG</issuerTradingSymbol>
+        <issuerForeignTradingSymbol></issuerForeignTradingSymbol>
+    </issuer>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0000947836</rptOwnerCik>
+            <rptOwnerName>HURT CLINT</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerNonUSAddressFlag>false</rptOwnerNonUSAddressFlag>
+            <rptOwnerStreet1>1701 ILLINOIS STREET</rptOwnerStreet1>
+            <rptOwnerStreet2></rptOwnerStreet2>
+            <rptOwnerCity>MIDLAND</rptOwnerCity>
+            <rptOwnerState>TX</rptOwnerState>
+            <rptOwnerZipCode>79701</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>1</isDirector>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <aff10b5One>0</aff10b5One>
+
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>COMMON STOCK</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-09-08</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>S</transactionCode>
+                <equitySwapInvolved>0</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>6000</value>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>220.44</value>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>D</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>73987</value>
+                    <footnoteId id="F1"/>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>D</value>
+                </directOrIndirectOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+    </nonDerivativeTable>
+
+    <footnotes>
+        <footnote id="F1">Includes 300 direct shares as to which Mr. Hurt has sole voting and investment power and 73,687 indirect shares held of record by Clint Hurt and Associates, a privately Controlled company.</footnote>
+    </footnotes>
+
+    <remarks>This amendment is being filed solely to correct the number of shares beneficially owned following the reported transaction, which was inadvertently reported as 73,937 shares in the original Form 4 due to an administrative error. No other changes have been made.</remarks>
+
+    <ownerSignature>
+        <signatureName>/s/ CLINT HURT</signatureName>
+        <signatureDate>2026-10-13</signatureDate>
+    </ownerSignature>
+</ownershipDocument>
+</XML>
+</TEXT>
+</DOCUMENT>
+</SEC-DOCUMENT>

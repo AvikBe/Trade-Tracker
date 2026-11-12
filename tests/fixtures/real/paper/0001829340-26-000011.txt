@@ -1,0 +1,163 @@
+<SEC-DOCUMENT>0001829340-26-000011.txt : 20261013
+<SEC-HEADER>0001829340-26-000011.hdr.sgml : 20261013
+<ACCEPTANCE-DATETIME>20261013150224
+ACCESSION NUMBER:		0001829340-26-000011
+CONFORMED SUBMISSION TYPE:	4
+PUBLIC DOCUMENT COUNT:		1
+CONFORMED PERIOD OF REPORT:	20261008
+FILED AS OF DATE:		20261013
+DATE AS OF CHANGE:		20261013
+
+REPORTING-OWNER:	
+
+	OWNER DATA:	
+		COMPANY CONFORMED NAME:			vant Hoff Graham
+		CENTRAL INDEX KEY:			0001829340
+		ORGANIZATION NAME:           	
+
+	FILING VALUES:
+		FORM TYPE:		4
+		SEC ACT:		1934 Act
+		SEC FILE NUMBER:	001-41279
+		FILM NUMBER:		261456591
+
+	MAIL ADDRESS:	
+		STREET 1:		C/O BLUESCAPE ENERGY PARTNERS, LLC
+		STREET 2:		200 CRESCENT COURT, SUITE 1900
+		CITY:			DALLAS
+		STATE:			TX
+		ZIP:			75201
+
+ISSUER:		
+
+	COMPANY DATA:	
+		COMPANY CONFORMED NAME:			5E Advanced Materials, Inc.
+		CENTRAL INDEX KEY:			0001888654
+		STANDARD INDUSTRIAL CLASSIFICATION:	MINING, QUARRYING OF NONMETALLIC MINERALS (NO FUELS) [1400]
+		ORGANIZATION NAME:           	01 Energy & Transportation
+		EIN:				873426517
+		FISCAL YEAR END:			0630
+
+	BUSINESS ADDRESS:	
+		STREET 1:		9329 MARIPOSA ROAD
+		STREET 2:		SUITE 210
+		CITY:			HESPERIA
+		STATE:			CA
+		ZIP:			92344
+		BUSINESS PHONE:		442 292 2120
+
+	MAIL ADDRESS:	
+		STREET 1:		9329 MARIPOSA ROAD
+		STREET 2:		SUITE 210
+		CITY:			HESPERIA
+		STATE:			CA
+		ZIP:			92344
+</SEC-HEADER>
+<DOCUMENT>
+<TYPE>4
+<SEQUENCE>1
+<FILENAME>primarydocument.xml
+<DESCRIPTION>PRIMARY DOCUMENT
+<TEXT>
+<XML>
+<?xml version="1.0"?>
+<ownershipDocument>
+
+    <schemaVersion>X0609</schemaVersion>
+
+    <documentType>4</documentType>
+
+    <periodOfReport>2026-10-08</periodOfReport>
+
+    <notSubjectToSection16>false</notSubjectToSection16>
+
+    <issuer>
+        <issuerCik>0001888654</issuerCik>
+        <issuerName>5E Advanced Materials, Inc.</issuerName>
+        <issuerTradingSymbol>FEAM</issuerTradingSymbol>
+        <issuerForeignTradingSymbol></issuerForeignTradingSymbol>
+    </issuer>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0001829340</rptOwnerCik>
+            <rptOwnerName>vant Hoff Graham</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerNonUSAddressFlag>false</rptOwnerNonUSAddressFlag>
+            <rptOwnerStreet1>9329 MARIPOSA ROAD</rptOwnerStreet1>
+            <rptOwnerStreet2>STE 210</rptOwnerStreet2>
+            <rptOwnerCity>HESPERIA</rptOwnerCity>
+            <rptOwnerState>CA</rptOwnerState>
+            <rptOwnerZipCode>92344</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>true</isDirector>
+            <isOfficer>false</isOfficer>
+            <isTenPercentOwner>false</isTenPercentOwner>
+            <isOther>false</isOther>
+            <officerTitle></officerTitle>
+            <otherText></otherText>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <aff10b5One>false</aff10b5One>
+
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-10-08</value>
+            </transactionDate>
+            <deemedExecutionDate></deemedExecutionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>P</transactionCode>
+                <equitySwapInvolved>false</equitySwapInvolved>
+            </transactionCoding>
+            <transactionTimeliness></transactionTimeliness>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>60000.00</value>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>3.59</value>
+                    <footnoteId id="F1"/>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>A</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>102997.00</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>D</value>
+                </directOrIndirectOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+    </nonDerivativeTable>
+
+    <derivativeTable></derivativeTable>
+
+    <footnotes>
+        <footnote id="F1">The price reported in Column 4 is a weighted average price. These shares were purchased in multiple transactions at prices ranging from $3.45 to $3.65, inclusive. The Reporting Person undertakes to provide to the Issuer, any security holder of the Issuer, or the staff of the Securities and Exchange Commission, upon request, full information regarding the number of shares purchased at each separate price within the range set forth in this footnote.</footnote>
+    </footnotes>
+
+    <remarks></remarks>
+
+    <ownerSignature>
+        <signatureName>/s/ Paul Weibel, as Attorney-in-Fact for Graham van't Hoff</signatureName>
+        <signatureDate>2026-10-13</signatureDate>
+    </ownerSignature>
+</ownershipDocument>
+</XML>
+</TEXT>
+</DOCUMENT>
+</SEC-DOCUMENT>
