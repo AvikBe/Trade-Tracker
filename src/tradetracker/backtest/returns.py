@@ -94,6 +94,33 @@ def _leg(bars: Bars, start: date, end: date) -> float | None:
     return None if not o else bars.bars[j].adj_close / o - 1
 
 
+def pre_entry(e: Event, stock: Bars, entry: date, out: Outcome) -> Outcome:
+    """The point-in-time checks, all from bars before `entry`: drift, the ticker check,
+    dollar volume and cost. Shared with the paper trader, which has no entry bar yet."""
+    t0 = _close_as_of(stock, e.first_trade_date)
+    pre = stock.index_before(entry)
+    if t0 is not None and pre is not None and stock.dates[pre] >= t0[0]:
+        move = stock.bars[pre].adj_close / t0[1] - 1
+        out.drift_pct = 100 * (-move if e.side == "sell" else move)
+    else:
+        out.flags.append("no_drift")
+    t1 = _close_as_of(stock, e.last_trade_date)
+    if e.avg_price and t1 is not None and t1[2]:
+        out.price_ratio = e.avg_price / t1[2]
+        lo, hi = TICKER_CHECK
+        if not lo <= out.price_ratio <= hi:
+            out.status = "ticker_mismatch"
+            return out
+    else:
+        out.flags.append("no_price_check")
+    i = 0 if pre is None else pre + 1
+    window = [b for b in stock.bars[max(0, i - LIQUIDITY_WINDOW):i] if b.close and b.volume is not None]
+    if window:
+        out.dollar_volume = statistics.median(b.close * b.volume for b in window)
+    out.cost = round_trip_cost(out.dollar_volume)
+    return out
+
+
 def evaluate(
     e: Event,
     stock: Bars | None,
@@ -123,27 +150,9 @@ def evaluate(
     if entry_bar.date != planned:
         out.flags.append("late_entry")
 
-    # Point-in-time checks, all from bars before entry.
-    t0 = _close_as_of(stock, e.first_trade_date)
-    pre = stock.index_before(entry_bar.date)
-    if t0 is not None and pre is not None and stock.dates[pre] >= t0[0]:
-        move = stock.bars[pre].adj_close / t0[1] - 1
-        out.drift_pct = 100 * (-move if e.side == "sell" else move)
-    else:
-        out.flags.append("no_drift")
-    t1 = _close_as_of(stock, e.last_trade_date)
-    if e.avg_price and t1 is not None and t1[2]:
-        out.price_ratio = e.avg_price / t1[2]
-        lo, hi = TICKER_CHECK
-        if not lo <= out.price_ratio <= hi:
-            out.status = "ticker_mismatch"
-            return out
-    else:
-        out.flags.append("no_price_check")
-    window = [b for b in stock.bars[max(0, i - LIQUIDITY_WINDOW):i] if b.close and b.volume is not None]
-    if window:
-        out.dollar_volume = statistics.median(b.close * b.volume for b in window)
-    out.cost = round_trip_cost(out.dollar_volume)
+    pre_entry(e, stock, entry_bar.date, out)
+    if out.status != "ok":
+        return out
 
     use_sector = sector if sector is not None and sector.at(entry_bar.date) else spy
     out.benchmark = sector_name if use_sector is sector else "SPY"

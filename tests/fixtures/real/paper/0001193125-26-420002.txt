@@ -1,0 +1,169 @@
+<SEC-DOCUMENT>0001193125-26-420002.txt : 20261013
+<SEC-HEADER>0001193125-26-420002.hdr.sgml : 20261013
+<ACCEPTANCE-DATETIME>20261013110612
+ACCESSION NUMBER:		0001193125-26-420002
+CONFORMED SUBMISSION TYPE:	4
+PUBLIC DOCUMENT COUNT:		1
+CONFORMED PERIOD OF REPORT:	20261009
+FILED AS OF DATE:		20261013
+DATE AS OF CHANGE:		20261013
+
+REPORTING-OWNER:	
+
+	OWNER DATA:	
+		COMPANY CONFORMED NAME:			BUCKMAN FREDERICK W
+		CENTRAL INDEX KEY:			0001144845
+		ORGANIZATION NAME:           	
+
+	FILING VALUES:
+		FORM TYPE:		4
+		SEC ACT:		1934 Act
+		SEC FILE NUMBER:	001-42252
+		FILM NUMBER:		261455731
+
+	MAIL ADDRESS:	
+		STREET 1:		QUANTA SERVICES, INC.
+		STREET 2:		1360 POST OAK BLVD., SUITE 2100
+		CITY:			HOUSTON
+		STATE:			TX
+		ZIP:			77056-3023
+
+ISSUER:		
+
+	COMPANY DATA:	
+		COMPANY CONFORMED NAME:			Terrestrial Energy Inc. /DE/
+		CENTRAL INDEX KEY:			0002019804
+		STANDARD INDUSTRIAL CLASSIFICATION:	FABRICATED PLATE WORK (BOILER SHOPS) [3443]
+		ORGANIZATION NAME:           	04 Manufacturing
+		EIN:				981785406
+		STATE OF INCORPORATION:			DE
+		FISCAL YEAR END:			1231
+
+	BUSINESS ADDRESS:	
+		STREET 1:		2730 W. TYVOLA ROAD, SUITE 100
+		CITY:			CHARLOTTE
+		STATE:			NC
+		ZIP:			28217
+		BUSINESS PHONE:		203-930-2200
+
+	MAIL ADDRESS:	
+		STREET 1:		2730 W. TYVOLA ROAD, SUITE 100
+		CITY:			CHARLOTTE
+		STATE:			NC
+		ZIP:			28217
+
+	FORMER COMPANY:	
+		FORMER CONFORMED NAME:	HCM II Acquisition Corp.
+		DATE OF NAME CHANGE:	20240415
+</SEC-HEADER>
+<DOCUMENT>
+<TYPE>4
+<SEQUENCE>1
+<FILENAME>ownership.xml
+<DESCRIPTION>4
+<TEXT>
+<XML>
+<?xml version="1.0"?>
+<ownershipDocument>
+
+    <schemaVersion>X0609</schemaVersion>
+
+    <documentType>4</documentType>
+
+    <periodOfReport>2026-10-09</periodOfReport>
+
+    <issuer>
+        <issuerCik>0002019804</issuerCik>
+        <issuerName>Terrestrial Energy Inc. /DE/</issuerName>
+        <issuerTradingSymbol>IMSR</issuerTradingSymbol>
+        <issuerForeignTradingSymbol></issuerForeignTradingSymbol>
+    </issuer>
+
+    <reportingOwner>
+        <reportingOwnerId>
+            <rptOwnerCik>0001144845</rptOwnerCik>
+            <rptOwnerName>BUCKMAN FREDERICK W</rptOwnerName>
+        </reportingOwnerId>
+        <reportingOwnerAddress>
+            <rptOwnerNonUSAddressFlag>false</rptOwnerNonUSAddressFlag>
+            <rptOwnerStreet1>C/O TERRESTRIAL ENERGY INC.</rptOwnerStreet1>
+            <rptOwnerStreet2>2730 W. TYVOLA ROAD, SUITE 100</rptOwnerStreet2>
+            <rptOwnerCity>CHARLOTTE</rptOwnerCity>
+            <rptOwnerState>NC</rptOwnerState>
+            <rptOwnerZipCode>28217</rptOwnerZipCode>
+            <rptOwnerStateDescription></rptOwnerStateDescription>
+        </reportingOwnerAddress>
+        <reportingOwnerRelationship>
+            <isDirector>true</isDirector>
+            <isOfficer>false</isOfficer>
+            <isTenPercentOwner>false</isTenPercentOwner>
+            <isOther>false</isOther>
+        </reportingOwnerRelationship>
+    </reportingOwner>
+
+    <aff10b5One>false</aff10b5One>
+
+    <nonDerivativeTable>
+        <nonDerivativeTransaction>
+            <securityTitle>
+                <value>Common Stock</value>
+            </securityTitle>
+            <transactionDate>
+                <value>2026-10-09</value>
+            </transactionDate>
+            <transactionCoding>
+                <transactionFormType>4</transactionFormType>
+                <transactionCode>P</transactionCode>
+                <equitySwapInvolved>false</equitySwapInvolved>
+            </transactionCoding>
+            <transactionAmounts>
+                <transactionShares>
+                    <value>12000</value>
+                </transactionShares>
+                <transactionPricePerShare>
+                    <value>3.278</value>
+                </transactionPricePerShare>
+                <transactionAcquiredDisposedCode>
+                    <value>A</value>
+                </transactionAcquiredDisposedCode>
+            </transactionAmounts>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>18669</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>D</value>
+                </directOrIndirectOwnership>
+            </ownershipNature>
+        </nonDerivativeTransaction>
+        <nonDerivativeHolding>
+            <securityTitle>
+                <value>Common Stock</value>
+            </securityTitle>
+            <postTransactionAmounts>
+                <sharesOwnedFollowingTransaction>
+                    <value>14930</value>
+                </sharesOwnedFollowingTransaction>
+            </postTransactionAmounts>
+            <ownershipNature>
+                <directOrIndirectOwnership>
+                    <value>I</value>
+                </directOrIndirectOwnership>
+                <natureOfOwnership>
+                    <value>Through Trust</value>
+                </natureOfOwnership>
+            </ownershipNature>
+        </nonDerivativeHolding>
+    </nonDerivativeTable>
+
+    <ownerSignature>
+        <signatureName>/s/ Brian Thrasher, as Attorney-in-Fact</signatureName>
+        <signatureDate>2026-10-13</signatureDate>
+    </ownerSignature>
+</ownershipDocument>
+</XML>
+</TEXT>
+</DOCUMENT>
+</SEC-DOCUMENT>
