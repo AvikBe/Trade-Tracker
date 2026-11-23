@@ -800,6 +800,9 @@ class ScriptedBroker:
     def equity(self):
         return 50_000.0
 
+    def cash(self):
+        return 50_000.0
+
     def tradable(self, s):
         return self.tradable_
 
@@ -1002,9 +1005,10 @@ def test_fresh_book_records_40_slots_without_a_note(tmp_path):
     assert "40 slots of 1/40 of equity" in R.render(st, b.prices, entry, 100_000)
 
 
-def test_full_20_slot_book_grows_to_40(tmp_path):
-    """The dry-run book on 2026-11-09: 20 positions held at 1/20 each. Switching to 40
-    keeps them as they are and fills the 20 new slots at 1/40 of equity."""
+def test_full_20_slot_book_grows_to_40_only_with_cash(tmp_path):
+    """The dry-run book on 2026-11-09: 20 positions at 1/20 each, fully invested. Switching
+    to 40 keeps them as they are; the new slots fill only as cash comes back, never on
+    margin. (Before 2026-11-23 the dry run filled them anyway and ran 147% invested.)"""
     first = [f"A{i:02d}" for i in range(20)]
     later = [f"B{i:02d}" for i in range(25)]
     bars, ds = _ranked_market(first + later)
@@ -1019,34 +1023,47 @@ def test_full_20_slot_book_grows_to_40(tmp_path):
     st.pop("slots")                       # state files written before this change have no slots key
     E.save_state(b20.state_path, st)
 
-    # Next morning: 25 new candidates, book now 40 slots.
     d2 = NYSE.add(entry, 1)
     write_day(tmp_path / "filings", entry,
               [buy_filing(t, 100 + k, entry, price=price_on(bars, t, entry)) for k, t in enumerate(later)])
     b40 = book(tmp_path, bars, slots=40)
     r2 = b40.run(d2)
     assert any("slots changed from 20 to 40" in n for n in r2.notes)
-    bought = [o["ticker"] for o in r2.submitted]
-    assert len(bought) == 20 and set(bought) <= set(later)
     st = E.load_state(b40.state_path)
     assert st["slots"] == 40
-    assert len(E.live_positions(st)) == 40
-    eq = b40.equity(st, d2)
     for p in st["positions"]:
         if p["ticker"] in before:         # held positions untouched
             assert p["entry_order"]["qty"] == before[p["ticker"]]["qty"]
-            assert p["entry_order"]["client_id"] == before[p["ticker"]]["client_id"]
             assert p["status"] == "open"
-        elif p["status"] == "pending_entry":
-            assert p["entry_order"]["qty"] == math.floor(eq / 40 / p["signal_close"])
-            assert p["entry_order"]["qty"] * p["signal_close"] <= eq / 40
-    assert (b40.cfg.state_dir / "decisions.csv").read_text().count("no free slot") == 5
-    # A third morning: the note is not repeated, and a full 40-slot book buys nothing.
-    d3 = NYSE.add(d2, 1)
-    write_day(tmp_path / "filings", d2, [buy_filing("ZZZ", 999, d2, price=1)])
-    r3 = b40.run(d3)
-    assert not any("slots changed" in n for n in r3.notes)
-    assert not r3.submitted
+    # Only the rounding leftovers of the 20 buys were free: at most a sliver is bought.
+    spent = sum(p["entry_price"] * p["entry_qty"] for p in st["positions"] if p["status"] == "open")
+    pending = sum(p["signal_close"] * p["entry_order"]["qty"] for p in st["positions"]
+                  if p["status"] == "pending_entry")
+    assert spent + pending <= 100_000.0 + 1e-6
+    assert b40.cash(st) >= -1e-6
+    assert "no cash left" in (b40.cfg.state_dir / "decisions.csv").read_text()
+
+
+def test_new_buys_never_exceed_cash(tmp_path):
+    names = [f"T{i:02d}" for i in range(45)]
+    bars, ds = _ranked_market(names)
+    filed, entry = ds[320], ds[321]
+    write_day(tmp_path / "filings", filed,
+              [buy_filing(t, k + 1, filed, price=price_on(bars, t, filed)) for k, t in enumerate(names)])
+    b = new_book(tmp_path, bars, ds, filed, slots=40)
+    st = E.load_state(b.state_path)
+    st["start_cash"] = 10_000.0           # equity/40 = $250 a slot, but only $10k of cash
+    st["positions"].append({"id": "x", "ticker": "HELD", "status": "open", "entry_price": 1.0,
+                            "entry_qty": 9_000, "entry_session": ds[300].isoformat(),
+                            "exit_due": ds[400].isoformat(), "entry_order": {"qty": 9_000}})
+    E.save_state(b.state_path, st)
+    assert b.cash(st) == 1_000.0
+    r = b.run(entry)
+    st = E.load_state(b.state_path)
+    cost = sum(p["signal_close"] * p["entry_order"]["qty"] for p in st["positions"]
+               if p["status"] == "pending_entry")
+    assert 0 < cost <= 1_000.0 and r.submitted
+    assert "no cash left" in (b.cfg.state_dir / "decisions.csv").read_text()
 
 
 def test_report_defaults_to_20_slots_for_old_state(tmp_path):

@@ -112,6 +112,10 @@ class AlpacaPaper:
     def equity(self) -> float:
         return float(self.account()["equity"])
 
+    def cash(self) -> float:
+        """Cash, not buying power: the book never buys on margin."""
+        return float(self.account()["cash"])
+
     def position_qty(self, symbol: str) -> float | None:
         """Shares held now (after any split), or 0 when there's no position."""
         r = self._req("GET", f"/v2/positions/{symbol}")

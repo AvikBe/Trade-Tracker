@@ -283,6 +283,21 @@ class Book:
                 eq += p["entry_price"] * p["entry_qty"] * (mark(self.prices, p, session) or 0.0)
         return eq
 
+    def cash(self, state: dict) -> float:
+        """Cash left for new buys: no margin. Dry run: start cash plus realized P&L less the
+        cost of held and pending positions. Alpaca: the account's cash less pending buys."""
+        pending = sum((p.get("signal_close") or 0.0) * p["entry_order"]["qty"]
+                      for p in state["positions"] if p["status"] == "pending_entry")
+        if self.broker.kind != "dry-run":
+            return self.broker.cash() - pending
+        c = state["start_cash"]
+        for p in state["positions"]:
+            if p["status"] == "closed" and p.get("ret") is not None:
+                c += p["entry_price"] * p["entry_qty"] * p["ret"]
+            elif p["status"] in ("open", "pending_exit"):
+                c -= p["entry_price"] * p["entry_qty"]
+        return c - pending
+
     def _order(self, p: dict, leg: str, side: str, qty: int, tif: str, session: date,
                res: RunResult) -> None:
         cid = f"tt-{session.isoformat()}-{p['ticker']}-{side}"
@@ -321,6 +336,7 @@ class Book:
         if not cands:
             return
         size = self.equity(state, session) / self.cfg.slots
+        cash = self.cash(state)
         for d in cands:
             if d.ticker in tickers:
                 actions[id(d)] = "already held"
@@ -328,9 +344,9 @@ class Book:
             if free <= 0:
                 actions[id(d)] = "no free slot"
                 continue
-            qty = math.floor(size / d.last_close) if d.last_close else 0
+            qty = math.floor(min(size, max(cash, 0.0)) / d.last_close) if d.last_close else 0
             if qty < 1:
-                actions[id(d)] = "price above one slot"
+                actions[id(d)] = "price above one slot" if cash >= size else "no cash left"
                 continue
             if not self.broker.tradable(d.ticker):
                 actions[id(d)] = "not tradable at the broker"
@@ -350,6 +366,7 @@ class Book:
                 p.update(status="not_filled", close_reason="buy rejected")
             else:
                 actions[id(d)] = f"buy {qty}"
+                cash -= qty * d.last_close
                 free -= 1
                 tickers.add(d.ticker)
             state["positions"].append(p)
